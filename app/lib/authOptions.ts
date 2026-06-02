@@ -7,6 +7,8 @@ import crypto from 'crypto'
 // Google OAuth redirect URI (add EXACTLY in Google Cloud Console):
 // {NEXTAUTH_URL}/api/auth/callback/google
 export const authOptions: NextAuthOptions = {
+  // Required on Firebase App Hosting / custom domains (NextAuth UntrustedHost)
+  trustHost: true,
   providers: [
     GoogleProvider({
       clientId: process.env.GOOGLE_CLIENT_ID || '',

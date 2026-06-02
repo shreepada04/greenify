@@ -1,110 +1,202 @@
-# Deploying Greenify (Firebase + production stack)
+# Deploy Greenify on Firebase App Hosting
 
-Greenify is a **Next.js 14 full-stack app** (React UI + API routes + MongoDB). Plan your deployment accordingly.
+Greenify is a **Next.js 14 full-stack app** (API routes + MongoDB). Use **Firebase App Hosting** — not classic Hosting alone.
 
-## Recommended architecture for production
-
-| Layer | Service | Why |
-|--------|---------|-----|
-| **App hosting** | [Firebase App Hosting](https://firebase.google.com/docs/app-hosting) or **Vercel** | Runs Next.js with API routes |
-| **Database** | [MongoDB Atlas](https://www.mongodb.com/atlas) (free tier) | Already used by the app |
-| **Media** | ImageKit | Photo uploads |
-| **Auth** | JWT cookies + optional Google OAuth | Already implemented |
-
-> **Note:** Firebase **Hosting alone** only serves static files. It cannot run `/api/*` routes unless you use **App Hosting**, **Cloud Functions**, or a separate backend.
+| What you need | Service |
+|---------------|---------|
+| App (Next.js) | **Firebase App Hosting** |
+| Database | **MongoDB Atlas** (free tier) |
+| Images | **ImageKit** |
+| Google login | **Google Cloud OAuth** |
 
 ---
 
-## Option A — Firebase App Hosting (best Firebase fit)
+## Before you start
 
-1. Create a [Firebase project](https://console.firebase.google.com/).
-2. Install CLI: `npm install -g firebase-tools`
-3. Login: `firebase login`
-4. Enable **App Hosting** in Firebase console and connect your GitHub repo (or deploy via CLI).
-5. Set **environment variables** in Firebase console:
+1. **GitHub repo** with this code pushed (`main` branch).
+2. **MongoDB Atlas** cluster (not `localhost`).  
+   - [mongodb.com/atlas](https://www.mongodb.com/atlas) → Create cluster → Connect → copy `mongodb+srv://...`  
+   - Network Access → **Allow access from anywhere** (`0.0.0.0/0`) for App Hosting.
+3. **Firebase Blaze plan** (pay-as-you-go). App Hosting requires it; small traffic stays within free tiers.
+4. Copy values from your local `.env.local` (you will paste them into Firebase).
 
+---
+
+## Step 1 — Create a Firebase project
+
+1. Open [Firebase Console](https://console.firebase.google.com/).
+2. **Add project** (e.g. `greenify-prod`).
+3. Upgrade to **Blaze** if prompted: Project settings → Usage and billing.
+
+---
+
+## Step 2 — Create an App Hosting backend
+
+1. In the console: **Build** → **App Hosting** (or **Hosting & Serverless** → **App Hosting**).
+2. Click **Get started** / **Create backend**.
+3. **Connect GitHub** — authorize Firebase, pick your `greenify` repository.
+4. Settings:
+   - **Root directory:** `/` (if the repo root contains `package.json`).  
+     If the repo is the parent folder and the app is in a subfolder, set e.g. `greenify-main`.
+   - **Live branch:** `main`
+   - **Automatic rollouts:** ON
+   - **Region:** pick one close to your users (e.g. `us-central1`)
+   - **Backend name:** e.g. `greenify`
+5. Click **Finish and deploy**.
+
+First deploy takes about **5–10 minutes**. Your URL looks like:
+
+`https://BACKEND_ID--PROJECT_ID.us-central1.hosted.app`
+
+Copy this URL — you need it for env vars and Google OAuth.
+
+---
+
+## Step 3 — Set environment variables
+
+1. Firebase Console → **App Hosting** → your backend → **Settings** → **Environment**.
+2. Click **Add variable** (or paste from `.env` — see below).
+3. Add **every** variable from `.env.example` with **production** values:
+
+| Variable | Example / notes |
+|----------|-----------------|
+| `MONGODB_URI` | `mongodb+srv://user:pass@cluster.mongodb.net/greenify` |
+| `JWT_SECRET` | Long random string (32+ chars) |
+| `JWT_REFRESH_SECRET` | Different long random string |
+| `NEXTAUTH_URL` | **Your App Hosting URL** (no trailing slash) |
+| `NEXTAUTH_SECRET` | Long random string (32+ chars) |
+| `GOOGLE_CLIENT_ID` | From Google Cloud Console |
+| `GOOGLE_CLIENT_SECRET` | From Google Cloud Console |
+| `IMAGEKIT_PUBLIC_KEY` | From ImageKit dashboard |
+| `IMAGEKIT_PRIVATE_KEY` | From ImageKit dashboard |
+| `IMAGEKIT_URL_ENDPOINT` | e.g. `https://ik.imagekit.io/your_id` |
+| `NODE_ENV` | `production` (also in `apphosting.yaml`) |
+
+**Quick paste:** copy all lines from `.env.local` into the first “Key” field in the console (KEY=value format). Then **change** `NEXTAUTH_URL` to your live Firebase URL.
+
+4. **Create a new rollout** (Deployments → Rollout) so variables apply.
+
+### Optional — secrets via CLI
+
+```powershell
+cd "path\to\greenify-main"
+npx firebase login
+npx firebase use YOUR_PROJECT_ID
+npx firebase apphosting:secrets:set MONGODB_URI
+# repeat for each secret, then uncomment env blocks in apphosting.yaml
+npx firebase apphosting:secrets:grantaccess MONGODB_URI --backend greenify
 ```
-MONGODB_URI=mongodb+srv://...
-JWT_SECRET=<long-random-string>
-JWT_REFRESH_SECRET=<long-random-string>
-NEXTAUTH_URL=https://your-domain.web.app
-NEXTAUTH_SECRET=<long-random-string>
-GOOGLE_CLIENT_ID=...
-GOOGLE_CLIENT_SECRET=...
-IMAGEKIT_PUBLIC_KEY=...
-IMAGEKIT_PRIVATE_KEY=...
-IMAGEKIT_URL_ENDPOINT=...
+
+---
+
+## Step 4 — Google OAuth (production)
+
+1. [Google Cloud Console](https://console.cloud.google.com/apis/credentials) → your OAuth client.
+2. **Authorized JavaScript origins:**  
+   `https://YOUR-BACKEND-ID--PROJECT-ID.us-central1.hosted.app`
+3. **Authorized redirect URIs:**  
+   `https://YOUR-BACKEND-ID--PROJECT-ID.us-central1.hosted.app/api/auth/callback/google`
+4. Save. Wait a few minutes for Google to propagate.
+
+---
+
+## Step 5 — Seed production database
+
+From your PC (with Atlas URI in `.env.local` or a temp env):
+
+```powershell
+cd "path\to\greenify-main"
+$env:MONGODB_URI="mongodb+srv://..."   # your Atlas URI
+& "C:\Program Files\nodejs\npm.cmd" run seed:admin
+& "C:\Program Files\nodejs\npm.cmd" run seed:rewards
+node scripts/enhanceBrandRewards.js
 ```
 
-6. Update **Google OAuth** redirect URI:
-   `https://your-domain.web.app/api/auth/callback/google`
-
-7. Deploy from project root (`greenify-main` folder).
+Default admin (change password after first login): see `ADMIN_CREDENTIALS.md`.
 
 ---
 
-## Option B — Vercel + MongoDB Atlas (fastest for Next.js)
+## Step 6 — Verify the live app
 
-1. Push code to GitHub.
-2. Import project on [vercel.com](https://vercel.com).
-3. Root directory: `greenify-main`
-4. Add the same env vars as above.
-5. Deploy — Vercel runs `next build` automatically.
+1. Open your `hosted.app` URL.
+2. Register / log in / submit an activity / redeem a reward.
+3. Admin: `https://YOUR-URL/admin`
+4. If Google login fails with **UntrustedHost**, ensure `trustHost: true` is in `authOptions.ts` (already set) and `NEXTAUTH_URL` matches the live URL exactly.
 
-Firebase can still be used later for **Analytics**, **Crashlytics**, or **Auth** if you migrate.
-
----
-
-## Option C — Firebase Hosting (static only — not recommended)
-
-Only if you export a static site (`output: 'export'` in `next.config.js`). **You would lose:**
-
-- Login API, rewards redeem, wallet history, admin panel APIs, uploads
-
-Do **not** use this for the current Greenify codebase without major refactoring.
+Check logs: Firebase Console → App Hosting → backend → **Logs** (or Google Cloud Logging).
 
 ---
 
-## Pre-deploy checklist
+## Custom domain (optional)
 
-- [ ] MongoDB Atlas cluster created; IP allowlist `0.0.0.0/0` (or Vercel/Firebase IPs)
-- [ ] Run `npm run seed:admin` and `npm run seed:rewards` on production DB
-- [ ] Run `node scripts/enhanceBrandRewards.js` for shop URLs on coupons
-- [ ] ImageKit production keys configured
-- [ ] Google OAuth production redirect URIs added
-- [ ] Change default admin password after first login
-- [ ] Set `NODE_ENV=production` (cookies use `secure: true` in production)
+1. App Hosting → backend → **Domains** → **Add custom domain**.
+2. Follow DNS instructions.
+3. Update `NEXTAUTH_URL` and Google OAuth URIs to `https://yourdomain.com`.
+4. Roll out again.
 
 ---
 
-## Build locally before deploy
+## Deploy updates
 
-```bash
-cd greenify-main
-npm install
-npm run build
-npm start
+Push to `main` on GitHub → App Hosting rolls out automatically.
+
+Local check before push:
+
+```powershell
+npm.cmd run build
 ```
 
 ---
 
-## Environment variables reference
+## Firebase CLI (optional)
 
-See `.env.example` for the full list. Never commit `.env.local`.
+```powershell
+# Install CLI (project dev dependency)
+npm.cmd install
+
+# Login and select project
+npx firebase login
+npx firebase use YOUR_PROJECT_ID
+
+# List backends
+npx firebase apphosting:backends:list
+```
 
 ---
 
-## Custom domain
+## Troubleshooting
 
-- **Firebase App Hosting:** Firebase console → App Hosting → Custom domain
-- **Vercel:** Project settings → Domains
-
-Update `NEXTAUTH_URL` and Google OAuth URIs to match your custom domain.
+| Problem | Fix |
+|---------|-----|
+| Build fails | Run `npm run build` locally; fix TypeScript errors |
+| 500 on login/API | Check env vars; Atlas IP allowlist; Cloud logs |
+| Google OAuth error | `NEXTAUTH_URL` + redirect URI must match live URL |
+| Cookies not set | App must be `https`; `NODE_ENV=production` |
+| MongoDB timeout | Atlas network access `0.0.0.0/0`; correct `MONGODB_URI` |
+| “Hosting only” | Use **App Hosting**, not classic static Hosting |
 
 ---
 
-## Need help choosing?
+## Why not classic Firebase Hosting?
 
-- Want **everything on Google/Firebase** → **Firebase App Hosting** + Atlas + ImageKit  
-- Want **easiest Next.js deploy** → **Vercel** + Atlas + ImageKit  
-- Both work with this codebase as-is.
+Classic Hosting serves **static files only**. Greenify needs `/api/*`, auth cookies, MongoDB, and ImageKit — that requires **App Hosting** (Cloud Run) or another Node host (e.g. Vercel).
+
+---
+
+## Architecture diagram
+
+```mermaid
+flowchart LR
+  User[Browser] --> CDN[Firebase CDN]
+  CDN --> Run[Cloud Run - Next.js]
+  Run --> Atlas[(MongoDB Atlas)]
+  Run --> IK[ImageKit]
+  Run --> Google[Google OAuth]
+  GitHub[GitHub main] -->|auto deploy| Run
+```
+
+---
+
+## Need the fastest path?
+
+If Firebase setup feels heavy, **Vercel + MongoDB Atlas** deploys the same repo in minutes — see Option B in the original notes. Firebase App Hosting is the right choice when you want everything on Google Cloud.

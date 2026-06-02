@@ -10,7 +10,9 @@
     "seed:rewards": "node scripts/seedRewards.js",
     "seed:admin": "node scripts/seedAdmin.js",
     "seed:demo": "node scripts/seedDemoData.js",
-    "enhance:brands": "node scripts/enhanceBrandRewards.js"
+    "enhance:brands": "node scripts/enhanceBrandRewards.js",
+    "firebase:login": "firebase login",
+    "firebase:backends": "firebase apphosting:backends:list"
   },
   "dependencies": {
     "@tailwindcss/forms": "^0.5.7",
@@ -39,6 +41,7 @@
     "dotenv": "^17.2.2",
     "eslint": "^8.51.0",
     "eslint-config-next": "14.0.0",
+    "firebase-tools": "^14.27.0",
     "typescript": "^5.2.2"
   },
   "optionalDependencies": {
