@@ -335,32 +335,86 @@ export default function AdminActivitiesPage() {
                             </div>
                           </div>
                         )}
-
                         {/* Media verification scores */}
                         {activity.mediaVerification && (
-                          <div className="mb-4 p-3 bg-purple-50 dark:bg-purple-900/30 border border-purple-200 dark:border-purple-800 rounded-lg">
-                            <div className="flex items-center gap-2 mb-2">
-                              <Fingerprint className="h-4 w-4 text-purple-600" />
-                              <p className="text-sm font-medium text-purple-800 dark:text-purple-300">
-                                Authenticity Score: {activity.mediaVerification.authenticityScore}/100
+                          <div className="mb-4 p-4 bg-purple-50 dark:bg-purple-950/20 border border-purple-200 dark:border-purple-800/60 rounded-xl">
+                            <div className="flex items-center gap-2 mb-3">
+                              <Fingerprint className="h-5 w-5 text-purple-600 dark:text-purple-400" />
+                              <div>
+                                <p className="text-sm font-semibold text-purple-800 dark:text-purple-300">
+                                  Media Authenticity Score: {activity.mediaVerification.authenticityScore}/100
+                                </p>
+                                <p className="text-xs text-purple-600 dark:text-purple-400">
+                                  {activity.mediaVerification.authenticityScore >= 80 
+                                    ? '🟢 Highly Authentic — safe to approve' 
+                                    : activity.mediaVerification.authenticityScore >= 50
+                                    ? '🟡 Caution — manual review recommended'
+                                    : '🔴 High Fraud Risk — reject or check details'}
+                                </p>
+                              </div>
+                            </div>
+                            
+                            {/* Score Breakdown & Reasons */}
+                            <div className="mt-3 space-y-2 border-t border-purple-200 dark:border-purple-800/40 pt-3 text-xs text-gray-700 dark:text-gray-300">
+                              <p className="font-semibold text-purple-800 dark:text-purple-300 mb-1">Authenticity Criteria Breakdown:</p>
+                              
+                              <div className="flex justify-between items-center">
+                                <span className="flex items-center gap-1.5">
+                                  {activity.mediaVerification.adminHashVerified ? '✅' : '❌'}
+                                  <span>Image Hash Integrity (SHA-256)</span>
+                                </span>
+                                <span className="font-semibold">{activity.mediaVerification.adminHashVerified ? '+35' : '+0'} / 35 pts</span>
+                              </div>
+                              <p className="text-3xs text-gray-500 dark:text-gray-400 pl-5 -mt-1">
+                                {activity.mediaVerification.adminHashVerified 
+                                  ? 'CDN photo matches local device hash. Integrity verified.' 
+                                  : 'Warning: Hash mismatch or not computed. Possible image tampering/injection.'}
+                              </p>
+
+                              <div className="flex justify-between items-center">
+                                <span className="flex items-center gap-1.5">
+                                  {activity.mediaVerification.allHashesUnique ? '✅' : '❌'}
+                                  <span>Photo Uniqueness (pHash)</span>
+                                </span>
+                                <span className="font-semibold">{activity.mediaVerification.allHashesUnique ? '+30' : '+0'} / 30 pts</span>
+                              </div>
+                              <p className="text-3xs text-gray-500 dark:text-gray-400 pl-5 -mt-1">
+                                {activity.mediaVerification.allHashesUnique 
+                                  ? 'No identical or similar perceptual hashes found in DB.' 
+                                  : 'Warning: Exact duplicate or similar perceptual hash found in another submission.'}
+                              </p>
+
+                              <div className="flex justify-between items-center">
+                                <span className="flex items-center gap-1.5">
+                                  {activity.mediaVerification.geoVerified ? '✅' : '❌'}
+                                  <span>Geo-location Matching</span>
+                                </span>
+                                <span className="font-semibold">{activity.mediaVerification.geoVerified ? '+20' : '+0'} / 20 pts</span>
+                              </div>
+                              <p className="text-3xs text-gray-500 dark:text-gray-400 pl-5 -mt-1">
+                                {activity.mediaVerification.geoVerified 
+                                  ? 'Photo GPS coordinates match submitted device location.' 
+                                  : 'Warning: Photo metadata location differs or GPS coordinates are missing.'}
+                              </p>
+
+                              <div className="flex justify-between items-center">
+                                <span className="flex items-center gap-1.5">
+                                  {activity.mediaVerification.captureFresh ? '✅' : '❌'}
+                                  <span>Live Capture Freshness</span>
+                                </span>
+                                <span className="font-semibold">{activity.mediaVerification.captureFresh ? '+15' : '+0'} / 15 pts</span>
+                              </div>
+                              <p className="text-3xs text-gray-500 dark:text-gray-400 pl-5 -mt-1">
+                                {activity.mediaVerification.captureFresh 
+                                  ? 'Photo captured within 30 minutes of submission.' 
+                                  : 'Warning: Photo was captured more than 30 minutes prior to submission (pre-existing photo).'}
                               </p>
                             </div>
-                            <div className="flex flex-wrap gap-2 text-xs">
-                              <span className={`px-2 py-1 rounded ${activity.mediaVerification.adminHashVerified ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'}`}>
-                                Hash {activity.mediaVerification.adminHashVerified ? '✓' : '?'}
-                              </span>
-                              <span className={`px-2 py-1 rounded ${activity.mediaVerification.geoVerified ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-                                Geo {activity.mediaVerification.geoVerified ? '✓' : '✗'}
-                              </span>
-                              <span className={`px-2 py-1 rounded ${activity.mediaVerification.captureFresh ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-                                Fresh {activity.mediaVerification.captureFresh ? '✓' : '✗'}
-                              </span>
-                              <span className={`px-2 py-1 rounded ${activity.mediaVerification.allHashesUnique ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-                                Unique {activity.mediaVerification.allHashesUnique ? '✓' : '✗'}
-                              </span>
-                            </div>
+                            
                             {activity.mediaVerification.adminNotes && (
-                              <p className="text-xs text-purple-600 mt-2">{activity.mediaVerification.adminNotes}</p>
+                              <p className="text-xs text-purple-750 dark:text-purple-300 font-medium mt-3 bg-purple-100/50 dark:bg-purple-900/20 p-2 rounded-lg">
+                                Note: {activity.mediaVerification.adminNotes}
+                              </p>
                             )}
                           </div>
                         )}

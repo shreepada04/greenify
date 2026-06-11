@@ -3,7 +3,11 @@
  * Run: node scripts/seedDemoData.js
  * Requires MONGODB_URI in .env.local (loaded via dotenv)
  */
-require('dotenv').config({ path: '.env.local' })
+const path = require('path')
+require('dotenv').config({
+  path: path.resolve(__dirname, '../.env.local'),
+  override: true,
+})
 const mongoose = require('mongoose')
 const bcrypt = require('bcryptjs')
 

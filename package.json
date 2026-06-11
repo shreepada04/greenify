@@ -10,6 +10,7 @@
     "seed:rewards": "node scripts/seedRewards.js",
     "seed:admin": "node scripts/seedAdmin.js",
     "seed:demo": "node scripts/seedDemoData.js",
+    "seed:real": "node scripts/seedRealData.js",
     "enhance:brands": "node scripts/enhanceBrandRewards.js",
     "firebase:login": "firebase login",
     "firebase:backends": "firebase apphosting:backends:list"

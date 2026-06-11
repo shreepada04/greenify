@@ -1,9 +1,18 @@
+const path = require('path')
 const mongoose = require('mongoose')
 
 try {
-  require('dotenv').config({ path: '.env.local' })
+  require('dotenv').config({
+    path: path.resolve(__dirname, '../.env.local'),
+    override: true,
+  })
 } catch (e) {
   console.log('dotenv not found, using process.env directly')
+}
+
+if (!process.env.MONGODB_URI) {
+  console.error('MONGODB_URI required in .env.local')
+  process.exit(1)
 }
 
 const UserSchema = new mongoose.Schema({

@@ -69,6 +69,7 @@ export default function AdminDashboardPage() {
   })
   const [pendingActivities, setPendingActivities] = useState<any[]>([])
   const [recentVerifications, setRecentVerifications] = useState<any[]>([])
+  const [recentActivityLog, setRecentActivityLog] = useState<any[]>([])
   const [userAnalytics, setUserAnalytics] = useState<any>({
     topUsers: [],
     activityTrends: [],
@@ -85,9 +86,27 @@ export default function AdminDashboardPage() {
         setStats((prev) => ({
           ...prev,
           totalUsers: s.totalUsers ?? prev.totalUsers,
+          activeUsers: s.activeUsers ?? prev.activeUsers,
+          newRegistrations: s.newRegistrationsThisWeek ?? prev.newRegistrations,
+          totalRecycled: s.totalRecycled ?? prev.totalRecycled,
+          carbonSaved: s.carbonSaved ?? prev.carbonSaved,
           pendingActivities: s.pendingActivities ?? prev.pendingActivities,
+          approvedToday: s.approvedToday ?? prev.approvedToday,
+          rejectedToday: s.rejectedToday ?? prev.rejectedToday,
+          totalPointsAwarded: s.totalPointsAwarded ?? prev.totalPointsAwarded,
+          totalRewards: s.totalRewards ?? prev.totalRewards,
+          activeRewards: s.activeRewards ?? prev.activeRewards,
           rewardsRedeemed: s.rewardsRedeemed ?? prev.rewardsRedeemed,
         }))
+        
+        setUserAnalytics({
+          topUsers: s.topUsers ?? [],
+          activityTrends: s.activityTrends ?? [],
+          locationStats: s.locationStats ?? []
+        })
+
+        setRecentVerifications(s.recentVerifications ?? [])
+        setRecentActivityLog(s.recentActivityLog ?? [])
       }
 
       const activitiesResponse = await fetch('/api/admin/activities?status=pending', {
@@ -109,62 +128,7 @@ export default function AdminDashboardPage() {
       } else {
         const data = await activitiesResponse.json()
         setPendingActivities((data.activities || []).slice(0, 5))
-        if (data.stats) {
-          setStats((prev) => ({
-            ...prev,
-            pendingActivities: data.stats.pending ?? prev.pendingActivities,
-            approvedToday: data.stats.approved ?? prev.approvedToday,
-            rejectedToday: data.stats.rejected ?? prev.rejectedToday,
-          }))
-        }
       }
-
-      // Mock recent verifications data
-      setRecentVerifications([
-        {
-          id: '1',
-          activityTitle: 'Recycled plastic bottles',
-          userName: 'John Eco',
-          action: 'approved',
-          pointsAwarded: 50,
-          timestamp: new Date(Date.now() - 30 * 60 * 1000).toISOString()
-        },
-        {
-          id: '2',
-          activityTitle: 'LED bulb replacement',
-          userName: 'Sarah Green',
-          action: 'rejected',
-          reason: 'Insufficient proof',
-          timestamp: new Date(Date.now() - 45 * 60 * 1000).toISOString()
-        },
-        {
-          id: '3',
-          activityTitle: 'Tree planting',
-          userName: 'Mike Chen',
-          action: 'approved',
-          pointsAwarded: 100,
-          timestamp: new Date(Date.now() - 60 * 60 * 1000).toISOString()
-        }
-      ])
-
-      // Mock user analytics
-      setUserAnalytics({
-        topUsers: [
-          { name: 'John Eco', points: 1250, activities: 25 },
-          { name: 'Sarah Green', points: 980, activities: 19 },
-          { name: 'Mike Chen', points: 875, activities: 17 }
-        ],
-        activityTrends: [
-          { type: 'recycling', count: 145, growth: '+12%' },
-          { type: 'energy_saving', count: 89, growth: '+8%' },
-          { type: 'tree_planting', count: 67, growth: '+25%' }
-        ],
-        locationStats: [
-          { city: 'New Delhi', activities: 89 },
-          { city: 'Mumbai', activities: 76 },
-          { city: 'Bangalore', activities: 54 }
-        ]
-      })
     } catch (error) {
       console.error('Error fetching dashboard data:', error)
     }
@@ -224,6 +188,17 @@ export default function AdminDashboardPage() {
                 <span className="relative flex items-center space-x-2">
                   <CheckCircle className="h-4 w-4" />
                   <span>Activity Verification</span>
+                </span>
+              </button>
+
+              <button
+                onClick={() => router.push('/admin/audit-log')}
+                className="group relative px-6 py-3 bg-gradient-to-r from-indigo-500 to-pink-500 hover:from-indigo-600 hover:to-pink-600 text-white rounded-2xl transition-all duration-300 transform hover:scale-105 shadow-lg hover:shadow-xl font-medium"
+              >
+                <div className="absolute inset-0 bg-white/20 rounded-2xl opacity-0 group-hover:opacity-100 transition-opacity"></div>
+                <span className="relative flex items-center space-x-2">
+                  <FileText className="h-4 w-4" />
+                  <span>Audit Logs</span>
                 </span>
               </button>
               
@@ -541,9 +516,9 @@ export default function AdminDashboardPage() {
                       </div>
                     </div>
                     <span className={`text-sm font-medium ${
-                      trend.growth.startsWith('+') ? 'text-green-600' : 'text-red-600'
+                      (trend.growth || '+10%').startsWith('+') ? 'text-green-600' : 'text-red-600'
                     }`}>
-                      {trend.growth}
+                      {trend.growth || '+10%'}
                     </span>
                   </div>
                 ))}
@@ -618,10 +593,13 @@ export default function AdminDashboardPage() {
                 <p className="text-sm font-medium text-gray-900 dark:text-white">Analytics</p>
                 <p className="text-xs text-green-600">Detailed reports</p>
               </button>
-              <button className="p-4 bg-purple-50 dark:bg-purple-900/30 hover:bg-purple-100 dark:hover:bg-purple-900/50 rounded-lg transition-colors duration-200 border border-purple-200 dark:border-purple-800">
-                <Settings className="h-8 w-8 text-purple-600 mx-auto mb-2" />
-                <p className="text-sm font-medium text-gray-900 dark:text-white">Settings</p>
-                <p className="text-xs text-purple-600">System config</p>
+              <button 
+                onClick={() => router.push('/admin/audit-log')}
+                className="p-4 bg-purple-50 dark:bg-purple-900/30 hover:bg-purple-100 dark:hover:bg-purple-900/50 rounded-lg transition-colors duration-200 border border-purple-200 dark:border-purple-800"
+              >
+                <FileText className="h-8 w-8 text-purple-600 mx-auto mb-2" />
+                <p className="text-sm font-medium text-gray-900 dark:text-white">Audit Logs</p>
+                <p className="text-xs text-purple-600">View system events</p>
               </button>
             </div>
           </div>
@@ -786,37 +764,40 @@ export default function AdminDashboardPage() {
           <div className="bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6">
             <div className="flex items-center justify-between mb-6">
               <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Recent Platform Activity</h2>
-              <button className="text-primary-600 hover:text-primary-700 text-sm font-medium">View All</button>
+              <button 
+                onClick={() => router.push('/admin/audit-log')}
+                className="text-primary-600 hover:text-primary-700 text-sm font-medium"
+              >
+                View All
+              </button>
             </div>
             <div className="space-y-4">
-              <div className="flex items-center space-x-4 p-4 bg-gray-50 dark:bg-gray-700 rounded-lg">
-                <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-                <div className="flex-1">
-                  <p className="text-sm text-gray-900 dark:text-white">New user registered: john.doe@email.com</p>
-                  <p className="text-xs text-gray-600 dark:text-gray-400">2 minutes ago</p>
+              {recentActivityLog.map((log) => {
+                let dotColor = 'bg-blue-500'
+                if (log.eventType.startsWith('user.')) dotColor = 'bg-green-500'
+                else if (log.eventType.includes('approved')) dotColor = 'bg-emerald-500'
+                else if (log.eventType.includes('rejected')) dotColor = 'bg-red-500'
+                else if (log.eventType.includes('redeemed')) dotColor = 'bg-purple-500'
+                
+                return (
+                  <div key={log.id} className="flex items-center space-x-4 p-4 bg-gray-50 dark:bg-gray-700 rounded-lg">
+                    <div className={`w-2 h-2 ${dotColor} rounded-full`}></div>
+                    <div className="flex-1">
+                      <p className="text-sm text-gray-900 dark:text-white font-medium">{log.summary}</p>
+                      <p className="text-xs text-gray-600 dark:text-gray-400 flex items-center space-x-1">
+                        <span>By {log.actorName}</span>
+                        <span>•</span>
+                        <span>{new Date(log.createdAt).toLocaleString()}</span>
+                      </p>
+                    </div>
+                  </div>
+                )
+              })}
+              {recentActivityLog.length === 0 && (
+                <div className="text-center py-4">
+                  <p className="text-sm text-gray-600 dark:text-gray-400">No recent activity logged.</p>
                 </div>
-              </div>
-              <div className="flex items-center space-x-4 p-4 bg-gray-50 dark:bg-gray-700 rounded-lg">
-                <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
-                <div className="flex-1">
-                  <p className="text-sm text-gray-900 dark:text-white">Activity verified: Tree planting in Mumbai</p>
-                  <p className="text-xs text-gray-600 dark:text-gray-400">5 minutes ago</p>
-                </div>
-              </div>
-              <div className="flex items-center space-x-4 p-4 bg-gray-50 dark:bg-gray-700 rounded-lg">
-                <div className="w-2 h-2 bg-purple-500 rounded-full"></div>
-                <div className="flex-1">
-                  <p className="text-sm text-gray-900 dark:text-white">Reward redeemed: Swiggy 20% Off voucher</p>
-                  <p className="text-xs text-gray-600 dark:text-gray-400">8 minutes ago</p>
-                </div>
-              </div>
-              <div className="flex items-center space-x-4 p-4 bg-gray-50 dark:bg-gray-700 rounded-lg">
-                <div className="w-2 h-2 bg-yellow-500 rounded-full"></div>
-                <div className="flex-1">
-                  <p className="text-sm text-gray-900 dark:text-white">Badge earned: Week Warrior by sarah.green</p>
-                  <p className="text-xs text-gray-600 dark:text-gray-400">12 minutes ago</p>
-                </div>
-              </div>
+              )}
             </div>
           </div>
         </div>

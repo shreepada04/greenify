@@ -8,7 +8,7 @@ import crypto from 'crypto'
 // {NEXTAUTH_URL}/api/auth/callback/google
 export const authOptions: NextAuthOptions = {
   // Required on Firebase App Hosting / custom domains (NextAuth UntrustedHost)
-  trustHost: true,
+  ...({ trustHost: true } as any),
   providers: [
     GoogleProvider({
       clientId: process.env.GOOGLE_CLIENT_ID || '',

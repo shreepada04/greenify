@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import dbConnectSimple from '@/app/lib/mongodb-simple'
 import User from '@/app/lib/models/User'
 import { generateTokenPair } from '@/app/lib/jwt'
+import { createAuditLog } from '@/app/lib/auditLog'
 
 export async function POST(request: NextRequest) {
   try {

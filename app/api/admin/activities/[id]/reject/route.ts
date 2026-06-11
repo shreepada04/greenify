@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import dbConnectSimple from '@/app/lib/mongodb-simple'
 import Activity from '@/app/lib/models/Activity'
 import { verifyAccessToken } from '@/app/lib/jwt'
+import { createAuditLog } from '@/app/lib/auditLog'
+import User from '@/app/lib/models/User'
 
 export async function POST(
   request: NextRequest,

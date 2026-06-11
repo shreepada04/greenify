@@ -3,6 +3,7 @@ import dbConnectSimple from '@/app/lib/mongodb-simple'
 import Activity from '@/app/lib/models/Activity'
 import User from '@/app/lib/models/User'
 import { verifyAccessToken } from '@/app/lib/jwt'
+import { createAuditLog } from '@/app/lib/auditLog'
 
 export async function POST(
   request: NextRequest,
@@ -67,6 +68,22 @@ export async function POST(
       
       await user.save()
     }
+
+    const adminUser = await User.findById(currentUser.userId).select('name')
+    await createAuditLog({
+      eventType: 'activity.approved',
+      actorId: currentUser.userId,
+      actorName: adminUser?.name || 'Admin',
+      actorRole: 'admin',
+      targetType: 'activity',
+      targetId: activity._id,
+      summary: `Approved "${activity.title}" for ${(activity.userId as { name?: string })?.name || 'user'} (+${activity.pointsEarned} pts)`,
+      metadata: {
+        pointsAwarded: activity.pointsEarned,
+        userId: activity.userId?.toString(),
+        activityTitle: activity.title,
+      },
+    })
 
     return NextResponse.json({
       message: 'Activity approved successfully',
