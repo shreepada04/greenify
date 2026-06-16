@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
-import dbConnectSimple from '@/app/lib/mongodb-simple'
-import User from '@/app/lib/models/User'
+import { supabase } from '@/app/lib/supabase'
 import { authOptions } from '@/app/lib/authOptions'
 import { generateTokenPair } from '@/app/lib/jwt'
 
@@ -15,14 +14,18 @@ export async function GET(request: NextRequest) {
       return NextResponse.redirect(new URL('/login?error=oauth_failed', request.url))
     }
 
-    await dbConnectSimple()
-    const user = await User.findOne({ email: session.user.email.toLowerCase() })
-    if (!user) {
+    const { data: user, error } = await supabase
+      .from('users')
+      .select('*')
+      .eq('email', session.user.email.toLowerCase())
+      .maybeSingle()
+
+    if (error || !user) {
       return NextResponse.redirect(new URL('/login?error=user_not_found', request.url))
     }
 
     const { accessToken, refreshToken } = generateTokenPair({
-      userId: user._id.toString(),
+      userId: user.id,
       email: user.email,
       role: user.role,
     })
@@ -36,14 +39,14 @@ export async function GET(request: NextRequest) {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'lax',
-      maxAge: 24 * 60 * 60 * 1000,
+      maxAge: 24 * 60 * 60, // 24 hours in seconds
       path: '/',
     })
     response.cookies.set('refreshToken', refreshToken, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'lax',
-      maxAge: 7 * 24 * 60 * 60 * 1000,
+      maxAge: 7 * 24 * 60 * 60, // 7 days in seconds
       path: '/',
     })
 

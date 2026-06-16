@@ -96,7 +96,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } catch (error) {
       const message =
         error instanceof Error && error.name === 'AbortError'
-          ? 'Login timed out. Is MongoDB running?'
+          ? 'Login timed out. Is Supabase running?'
           : 'Network error. Please try again.'
       return { success: false, message }
     }
