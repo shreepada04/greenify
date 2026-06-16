@@ -1,14 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
-import dbConnectSimple from '@/app/lib/mongodb-simple'
-import Activity from '@/app/lib/models/Activity'
-import User from '@/app/lib/models/User'
+import { supabase } from '@/app/lib/supabase'
 import { requireAuth } from '@/app/lib/jwt'
-import mongoose from 'mongoose'
 
 export async function GET(request: NextRequest) {
   try {
-    await dbConnectSimple()
-    
     const currentUser = requireAuth(request)
     if (!currentUser) {
       return NextResponse.json(
@@ -17,112 +12,120 @@ export async function GET(request: NextRequest) {
       )
     }
 
-    // Convert userId string to ObjectId
-    const userObjectId = new mongoose.Types.ObjectId(currentUser.userId)
+    // Get user data from Supabase
+    const { data: user, error: userError } = await supabase
+      .from('users')
+      .select('*')
+      .eq('id', currentUser.userId)
+      .maybeSingle()
 
-    // Get user data
-    const user = await User.findById(userObjectId).lean()
-    if (!user) {
+    if (userError || !user) {
       return NextResponse.json(
         { error: 'User not found' },
         { status: 404 }
       )
     }
 
-    // Get activity statistics
-    const [
-      totalActivities,
-      approvedActivities,
-      pendingActivities,
-      rejectedActivities,
-      totalCarbonSaved,
-      recentActivities
-    ] = await Promise.all([
-      Activity.countDocuments({ userId: userObjectId }),
-      Activity.countDocuments({ userId: userObjectId, status: 'approved' }),
-      Activity.countDocuments({ userId: userObjectId, status: 'pending' }),
-      Activity.countDocuments({ userId: userObjectId, status: 'rejected' }),
-      Activity.aggregate([
-        { $match: { userId: userObjectId, status: 'approved' } },
-        { $group: { _id: null, total: { $sum: '$carbonSaved' } } }
-      ]),
-      Activity.find({ userId: userObjectId })
-        .sort({ createdAt: -1 })
-        .limit(5)
-        .select('type title status pointsEarned carbonSaved createdAt')
-        .lean()
-    ])
+    // Get user's activities from Supabase
+    const { data: userActs, error: actsError } = await supabase
+      .from('activities')
+      .select('*')
+      .eq('user_id', currentUser.userId)
 
-    // Calculate activity type breakdown
-    const activityBreakdown = await Activity.aggregate([
-      { $match: { userId: userObjectId, status: 'approved' } },
-      { 
-        $group: { 
-          _id: '$type', 
-          count: { $sum: 1 },
-          points: { $sum: '$pointsEarned' },
-          carbon: { $sum: '$carbonSaved' }
-        } 
+    if (actsError || !userActs) {
+      console.error('User stats activities fetch error:', actsError)
+      return NextResponse.json({ error: 'Failed to retrieve activity stats' }, { status: 500 })
+    }
+
+    // JS processing for metrics
+    const totalActivities = userActs.length
+    const approvedActivitiesList = userActs.filter(a => a.status === 'approved')
+    const approvedActivities = approvedActivitiesList.length
+    const pendingActivities = userActs.filter(a => a.status === 'pending').length
+    const rejectedActivities = userActs.filter(a => a.status === 'rejected').length
+
+    const totalCarbonSaved = approvedActivitiesList.reduce((acc, act) => acc + (Number(act.carbon_saved) || 0), 0)
+
+    const recentActivitiesRaw = [...userActs]
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+      .slice(0, 5)
+
+    // Calculate activity breakdown
+    const breakdownMap: Record<string, { count: number; points: number; carbon: number }> = {}
+    approvedActivitiesList.forEach(act => {
+      if (!breakdownMap[act.type]) {
+        breakdownMap[act.type] = { count: 0, points: 0, carbon: 0 }
       }
-    ])
+      breakdownMap[act.type].count++
+      breakdownMap[act.type].points += act.points_earned || 0
+      breakdownMap[act.type].carbon += Number(act.carbon_saved) || 0
+    })
+    const activityBreakdown = Object.entries(breakdownMap).map(([type, stats]) => ({
+      _id: type,
+      count: stats.count,
+      points: stats.points,
+      carbon: stats.carbon,
+    }))
 
     // Calculate monthly progress (last 6 months)
     const sixMonthsAgo = new Date()
     sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6)
 
-    const monthlyProgress = await Activity.aggregate([
-      { 
-        $match: { 
-          userId: userObjectId, 
-          status: 'approved',
-          createdAt: { $gte: sixMonthsAgo }
-        } 
-      },
-      {
-        $group: {
-          _id: {
-            year: { $year: '$createdAt' },
-            month: { $month: '$createdAt' }
-          },
-          activities: { $sum: 1 },
-          points: { $sum: '$pointsEarned' },
-          carbon: { $sum: '$carbonSaved' }
+    const progressMap: Record<string, { year: number; month: number; activities: number; points: number; carbon: number }> = {}
+    approvedActivitiesList.forEach(act => {
+      const date = new Date(act.created_at)
+      if (date >= sixMonthsAgo) {
+        const key = `${date.getFullYear()}-${date.getMonth() + 1}`
+        if (!progressMap[key]) {
+          progressMap[key] = { year: date.getFullYear(), month: date.getMonth() + 1, activities: 0, points: 0, carbon: 0 }
         }
-      },
-      { $sort: { '_id.year': 1, '_id.month': 1 } }
-    ])
+        progressMap[key].activities++
+        progressMap[key].points += act.points_earned || 0
+        progressMap[key].carbon += Number(act.carbon_saved) || 0
+      }
+    })
+    const monthlyProgress = Object.values(progressMap)
+      .sort((a, b) => a.year - b.year || a.month - b.month)
+      .map(item => ({
+        _id: { year: item.year, month: item.month },
+        activities: item.activities,
+        points: item.points,
+        carbon: item.carbon,
+      }))
+
+    const transformedRecentActivities = recentActivitiesRaw.map((activity) => ({
+      id: activity.id,
+      type: activity.type,
+      title: activity.title,
+      status: activity.status,
+      pointsEarned: activity.points_earned || 0,
+      carbonSaved: activity.carbon_saved || 0,
+      createdAt: activity.created_at,
+    }))
 
     return NextResponse.json({
       user: {
-        id: (user as any)._id.toString(),
-        name: (user as any).name,
-        email: (user as any).email,
-        points: (user as any).points || 0,
-        totalPointsEarned: (user as any).totalPointsEarned || 0,
-        level: (user as any).level || 1,
-        activitiesCompleted: (user as any).activitiesCompleted || 0,
-        joinedAt: (user as any).createdAt
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        points: user.points || 0,
+        totalPointsEarned: user.total_points_earned || 0,
+        level: user.level || 1,
+        activitiesCompleted: user.activities_completed || 0,
+        joinedAt: user.created_at,
       },
       stats: {
         totalActivities,
         approvedActivities,
         pendingActivities,
         rejectedActivities,
-        totalCarbonSaved: totalCarbonSaved[0]?.total || 0,
-        currentStreak: calculateStreak(recentActivities),
-        completionRate: totalActivities > 0 ? Math.round((approvedActivities / totalActivities) * 100) : 0
+        totalCarbonSaved,
+        currentStreak: calculateStreak(transformedRecentActivities),
+        completionRate: totalActivities > 0 ? Math.round((approvedActivities / totalActivities) * 100) : 0,
       },
       activityBreakdown,
       monthlyProgress,
-      recentActivities: recentActivities.map((activity: any) => ({
-        id: activity._id.toString(),
-        type: activity.type,
-        title: activity.title,
-        status: activity.status,
-        pointsEarned: activity.pointsEarned || 0,
-        carbonSaved: activity.carbonSaved || 0,
-        createdAt: activity.createdAt
-      }))
+      recentActivities: transformedRecentActivities,
     })
 
   } catch (error) {

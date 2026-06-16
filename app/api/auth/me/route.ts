@@ -1,12 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
-import dbConnectSimple from '@/app/lib/mongodb-simple'
-import User from '@/app/lib/models/User'
+import { supabase } from '@/app/lib/supabase'
 import { verifyAccessToken } from '@/app/lib/jwt'
 
 export async function GET(request: NextRequest) {
   try {
-    await dbConnectSimple()
-    
     // Get access token from cookies
     const accessToken = request.cookies.get('accessToken')?.value
     
@@ -28,8 +25,13 @@ export async function GET(request: NextRequest) {
     }
 
     // Find user in database
-    const user = await User.findById(currentUser.userId)
-    if (!user) {
+    const { data: user, error } = await supabase
+      .from('users')
+      .select('*')
+      .eq('id', currentUser.userId)
+      .maybeSingle()
+
+    if (error || !user) {
       return NextResponse.json(
         { error: 'User not found' },
         { status: 404 }
@@ -38,14 +40,14 @@ export async function GET(request: NextRequest) {
 
     // Return user data (without password)
     const userData = {
-      id: user._id.toString(),
+      id: user.id,
       name: user.name,
       email: user.email,
       role: user.role,
       points: user.points,
-      totalPointsEarned: user.totalPointsEarned,
+      totalPointsEarned: user.total_points_earned,
       level: user.level,
-      activitiesCompleted: user.activitiesCompleted
+      activitiesCompleted: user.activities_completed,
     }
 
     return NextResponse.json(userData)

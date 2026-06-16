@@ -1,7 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import dbConnectSimple from '@/app/lib/mongodb-simple'
-import Activity from '@/app/lib/models/Activity'
-import MediaFingerprint from '@/app/lib/models/MediaFingerprint'
+import { supabase } from '@/app/lib/supabase'
 import { requireAuth } from '@/app/lib/jwt'
 import { computeAuthenticityScore } from '@/app/lib/mediaVerification'
 
@@ -28,8 +26,6 @@ function calculateCarbonSaved(activityType: string, quantity: number): number {
 
 export async function POST(request: NextRequest) {
   try {
-    await dbConnectSimple()
-
     const currentUser = requireAuth(request)
     if (!currentUser) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -83,17 +79,20 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Duplicate photos in submission' }, { status: 400 })
     }
 
-    for (const hash of hashes) {
-      const existing = await MediaFingerprint.findOne({ contentHash: hash })
-      if (existing) {
-        return NextResponse.json(
-          {
-            error: 'One or more photos have already been used. Each photo can only be submitted once.',
-            duplicate: true,
-          },
-          { status: 409 }
-        )
-      }
+    // Check media fingerprints for duplicates in Supabase
+    const { data: existingFingerprints, error: fingerError } = await supabase
+      .from('media_fingerprints')
+      .select('content_hash')
+      .in('content_hash', hashes)
+
+    if (existingFingerprints && existingFingerprints.length > 0) {
+      return NextResponse.json(
+        {
+          error: 'One or more photos have already been used. Each photo can only be submitted once.',
+          duplicate: true,
+        },
+        { status: 409 }
+      )
     }
 
     let pointsEarned = ACTIVITY_POINTS[type as keyof typeof ACTIVITY_POINTS]
@@ -113,52 +112,68 @@ export async function POST(request: NextRequest) {
       captureFresh: allCaptureFresh,
     })
 
-    const activity = await Activity.create({
-      userId: currentUser.userId,
-      type,
-      title,
-      description,
-      quantity,
-      unit,
-      pointsEarned,
-      verificationMedia,
-      location,
-      carbonSaved,
-      status: 'pending',
-      submittedAt: new Date(),
-      mediaVerification: {
-        allHashesUnique: true,
-        geoVerified: allGeoVerified,
-        captureFresh: allCaptureFresh,
-        authenticityScore,
-      },
-    })
+    // Insert activity into Supabase
+    const { data: activity, error: activityError } = await supabase
+      .from('activities')
+      .insert({
+        user_id: currentUser.userId,
+        type,
+        title,
+        description,
+        quantity: quantity || null,
+        unit: unit || null,
+        points_earned: pointsEarned,
+        verification_media: verificationMedia,
+        location,
+        carbon_saved: carbonSaved,
+        status: 'pending',
+        media_verification: {
+          allHashesUnique: true,
+          geoVerified: allGeoVerified,
+          captureFresh: allCaptureFresh,
+          authenticityScore,
+        },
+      })
+      .select()
+      .maybeSingle()
 
-    for (const media of verificationMedia) {
-      if (media.contentHash) {
-        await MediaFingerprint.create({
-          contentHash: media.contentHash,
-          perceptualHash: media.perceptualHash || media.contentHash,
-          userId: currentUser.userId,
-          activityId: activity._id,
-          fileId: media.fileId,
-          url: media.url,
-          usedAt: new Date(),
-        })
+    if (activityError || !activity) {
+      console.error('Create activity error:', activityError)
+      return NextResponse.json({ error: 'Failed to submit activity' }, { status: 500 })
+    }
+
+    // Insert media fingerprints
+    const fingerprintsToInsert = verificationMedia
+      .filter((m: any) => m.contentHash)
+      .map((media: any) => ({
+        content_hash: media.contentHash,
+        perceptual_hash: media.perceptualHash || media.contentHash,
+        user_id: currentUser.userId,
+        activity_id: activity.id,
+        url: media.url,
+      }))
+
+    if (fingerprintsToInsert.length > 0) {
+      const { error: insertFingerError } = await supabase
+        .from('media_fingerprints')
+        .insert(fingerprintsToInsert)
+
+      if (insertFingerError) {
+        console.error('Failed to create media fingerprints:', insertFingerError)
       }
     }
 
     return NextResponse.json({
       message: 'Activity submitted successfully! Pending admin verification.',
       activity: {
-        id: activity._id.toString(),
+        id: activity.id,
         type: activity.type,
         title: activity.title,
         status: activity.status,
-        pointsEarned: activity.pointsEarned,
-        carbonSaved: activity.carbonSaved,
+        pointsEarned: activity.points_earned,
+        carbonSaved: activity.carbon_saved,
         authenticityScore,
-        submittedAt: activity.submittedAt,
+        submittedAt: activity.submitted_at,
       },
       notice: 'Points will be awarded once approved. Photos are fingerprinted and cannot be reused.',
     })
@@ -170,8 +185,6 @@ export async function POST(request: NextRequest) {
 
 export async function GET(request: NextRequest) {
   try {
-    await dbConnectSimple()
-
     const currentUser = requireAuth(request)
     if (!currentUser) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -183,40 +196,68 @@ export async function GET(request: NextRequest) {
     const status = searchParams.get('status')
     const type = searchParams.get('type')
 
-    const query: Record<string, unknown> = { userId: currentUser.userId }
-    if (status) query.status = status
-    if (type) query.type = type
+    let queryBuilder = supabase
+      .from('activities')
+      .select('*', { count: 'exact' })
+      .eq('user_id', currentUser.userId)
+
+    if (status) {
+      queryBuilder = queryBuilder.eq('status', status)
+    }
+    if (type) {
+      queryBuilder = queryBuilder.eq('type', type)
+    }
 
     const skip = (page - 1) * limit
-    const activities = await Activity.find(query)
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limit)
-      .populate('verifiedBy', 'name email')
+    const { data: activities, error, count } = await queryBuilder
+      .order('created_at', { ascending: false })
+      .range(skip, skip + limit - 1)
 
-    const total = await Activity.countDocuments(query)
-    const pages = Math.ceil(total / limit)
+    if (error || !activities) {
+      console.error('Get activities query error:', error)
+      return NextResponse.json({ error: 'Failed to retrieve activities' }, { status: 500 })
+    }
+
+    // Fetch verifiedBy users to populate name & email
+    const verifiedByIds = Array.from(new Set(activities.map(a => a.verified_by).filter(Boolean)))
+    const usersMap: Record<string, { id: string; name: string; email: string }> = {}
+    
+    if (verifiedByIds.length > 0) {
+      const { data: usersData } = await supabase
+        .from('users')
+        .select('id, name, email')
+        .in('id', verifiedByIds)
+      
+      if (usersData) {
+        usersData.forEach(u => {
+          usersMap[u.id] = u
+        })
+      }
+    }
 
     const transformedActivities = activities.map((activity) => ({
-      id: activity._id.toString(),
+      id: activity.id,
       type: activity.type,
       title: activity.title,
       description: activity.description,
-      pointsEarned: activity.pointsEarned,
+      pointsEarned: activity.points_earned,
       quantity: activity.quantity,
       unit: activity.unit,
-      verificationMedia: activity.verificationMedia,
+      verificationMedia: activity.verification_media,
       location: activity.location,
       status: activity.status,
-      carbonSaved: activity.carbonSaved,
-      mediaVerification: activity.mediaVerification,
-      submittedAt: activity.submittedAt,
-      verifiedAt: activity.verifiedAt,
-      verifiedBy: activity.verifiedBy,
-      rejectionReason: activity.rejectionReason,
-      createdAt: activity.createdAt,
-      updatedAt: activity.updatedAt,
+      carbonSaved: activity.carbon_saved,
+      mediaVerification: activity.media_verification,
+      submittedAt: activity.submitted_at,
+      verifiedAt: activity.verified_at,
+      verifiedBy: activity.verified_by ? usersMap[activity.verified_by] || null : null,
+      rejectionReason: activity.rejection_reason,
+      createdAt: activity.created_at,
+      updatedAt: activity.updated_at,
     }))
+
+    const total = count || 0
+    const pages = Math.ceil(total / limit)
 
     return NextResponse.json({
       activities: transformedActivities,

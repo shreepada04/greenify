@@ -1,13 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
-import dbConnectSimple from '@/app/lib/mongodb-simple'
-import User from '@/app/lib/models/User'
+import { supabase } from '@/app/lib/supabase'
 import { generateTokenPair } from '@/app/lib/jwt'
 import { createAuditLog } from '@/app/lib/auditLog'
+import bcrypt from 'bcryptjs'
 
 export async function POST(request: NextRequest) {
   try {
-    await dbConnectSimple()
-
     const { name, email, password } = await request.json()
 
     // Validate input
@@ -34,46 +32,76 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Check if user already exists
-    const existingUser = await User.findOne({ email })
-    if (existingUser) {
+    const cleanEmail = email.toLowerCase().trim()
+
+    // Hash the password
+    const hashedPassword = await bcrypt.hash(password, 12)
+
+    // Create new user in Supabase
+    const { data: user, error: createError } = await supabase
+      .from('users')
+      .insert({
+        name,
+        email: cleanEmail,
+        password: hashedPassword,
+        role: 'user',
+      })
+      .select()
+      .maybeSingle()
+
+    if (createError) {
+      console.error('User registration insert error:', createError)
+      // Check for PostgreSQL unique constraint violation (code 23505)
+      if (createError.code === '23505') {
+        return NextResponse.json(
+          { error: 'User with this email already exists' },
+          { status: 400 }
+        )
+      }
       return NextResponse.json(
-        { error: 'User with this email already exists' },
-        { status: 400 }
+        { error: 'Internal server error' },
+        { status: 500 }
       )
     }
 
-    // Create new user
-    const user = await User.create({
-      name,
-      email,
-      password,
-      role: 'user'
+    if (!user) {
+      return NextResponse.json(
+        { error: 'Failed to create user' },
+        { status: 500 }
+      )
+    }
+
+    // Create audit log
+    await createAuditLog({
+      eventType: 'user.registered',
+      actorId: user.id,
+      actorName: user.name,
+      actorRole: 'user',
+      summary: `New user registration: ${user.name} (${user.email})`,
     })
 
     // Generate access and refresh tokens
     const { accessToken, refreshToken } = generateTokenPair({
-      userId: user._id.toString(),
+      userId: user.id,
       email: user.email,
-      role: user.role
+      role: user.role,
     })
 
     // Return user data (without password) and tokens
     const userData = {
-      id: user._id.toString(),
+      id: user.id,
       name: user.name,
       email: user.email,
       role: user.role,
       points: user.points,
-      totalPointsEarned: user.totalPointsEarned,
+      totalPointsEarned: user.total_points_earned,
       level: user.level,
-      activitiesCompleted: user.activitiesCompleted
+      activitiesCompleted: user.activities_completed,
     }
 
-    // Set both access and refresh tokens as httpOnly cookies
     const response = NextResponse.json({ 
       user: userData,
-      message: 'Registration successful'
+      message: 'Registration successful',
     }, { status: 201 })
 
     // Set access token cookie
@@ -81,8 +109,8 @@ export async function POST(request: NextRequest) {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'strict',
-      maxAge: 24 * 60 * 60 * 1000, // 24 hours
-      path: '/'
+      maxAge: 24 * 60 * 60, // 24 hours in seconds
+      path: '/',
     })
 
     // Set refresh token cookie
@@ -90,23 +118,14 @@ export async function POST(request: NextRequest) {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'strict',
-      maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
-      path: '/'
+      maxAge: 7 * 24 * 60 * 60, // 7 days in seconds
+      path: '/',
     })
 
     return response
 
   } catch (error: any) {
     console.error('Registration error:', error)
-    
-    // Handle duplicate key error
-    if (error.code === 11000) {
-      return NextResponse.json(
-        { error: 'User with this email already exists' },
-        { status: 400 }
-      )
-    }
-    
     return NextResponse.json(
       { error: 'Internal server error' },
       { status: 500 }

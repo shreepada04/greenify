@@ -1,12 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
-import dbConnectSimple from '@/app/lib/mongodb-simple'
-import User from '@/app/lib/models/User'
+import { supabase } from '@/app/lib/supabase'
 import { verifyRefreshToken, generateTokenPair } from '@/app/lib/jwt'
 
 export async function POST(request: NextRequest) {
   try {
-    await dbConnectSimple()
-    
     // Get refresh token from cookies
     const refreshToken = request.cookies.get('refreshToken')?.value
     
@@ -27,8 +24,13 @@ export async function POST(request: NextRequest) {
     }
 
     // Find user in database
-    const user = await User.findById(payload.userId)
-    if (!user) {
+    const { data: user, error } = await supabase
+      .from('users')
+      .select('*')
+      .eq('id', payload.userId)
+      .maybeSingle()
+
+    if (error || !user) {
       return NextResponse.json(
         { error: 'User not found' },
         { status: 401 }
@@ -37,27 +39,27 @@ export async function POST(request: NextRequest) {
 
     // Generate new token pair
     const { accessToken, refreshToken: newRefreshToken } = generateTokenPair({
-      userId: user._id.toString(),
+      userId: user.id,
       email: user.email,
-      role: user.role
+      role: user.role,
     }, payload.tokenVersion)
 
     // Return user data and new access token
     const userData = {
-      id: user._id.toString(),
+      id: user.id,
       name: user.name,
       email: user.email,
       role: user.role,
       points: user.points,
-      totalPointsEarned: user.totalPointsEarned,
+      totalPointsEarned: user.total_points_earned,
       level: user.level,
-      activitiesCompleted: user.activitiesCompleted
+      activitiesCompleted: user.activities_completed,
     }
 
     // Set new tokens as httpOnly cookies
     const response = NextResponse.json({ 
       user: userData,
-      message: 'Token refreshed successfully'
+      message: 'Token refreshed successfully',
     })
 
     // Set new access token cookie

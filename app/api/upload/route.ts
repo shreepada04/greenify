@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { supabase } from '@/app/lib/supabase'
 import {
   uploadFile,
   validateFile,
@@ -10,8 +11,6 @@ import {
   computePerceptualHash,
   verifyMediaMetadata,
 } from '@/app/lib/mediaVerification'
-import MediaFingerprint from '@/app/lib/models/MediaFingerprint'
-import dbConnectSimple from '@/app/lib/mongodb-simple'
 import { requireAuth } from '@/app/lib/jwt'
 
 export async function POST(request: NextRequest) {
@@ -27,8 +26,6 @@ export async function POST(request: NextRequest) {
         { status: 503 }
       )
     }
-
-    await dbConnectSimple()
 
     const formData = await request.formData()
     const file = formData.get('file') as File
@@ -63,13 +60,19 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const existing = await MediaFingerprint.findOne({ contentHash })
+    // Check media fingerprint in Supabase
+    const { data: existing, error: fingerError } = await supabase
+      .from('media_fingerprints')
+      .select('*')
+      .eq('content_hash', contentHash)
+      .maybeSingle()
+
     if (existing) {
       return NextResponse.json(
         {
           error: 'This photo has already been used and cannot be submitted again',
           duplicate: true,
-          usedAt: existing.usedAt,
+          usedAt: existing.used_at,
         },
         { status: 409 }
       )

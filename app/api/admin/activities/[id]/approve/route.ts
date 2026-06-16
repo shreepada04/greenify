@@ -1,7 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import dbConnectSimple from '@/app/lib/mongodb-simple'
-import Activity from '@/app/lib/models/Activity'
-import User from '@/app/lib/models/User'
+import { supabase } from '@/app/lib/supabase'
 import { verifyAccessToken } from '@/app/lib/jwt'
 import { createAuditLog } from '@/app/lib/auditLog'
 
@@ -10,8 +8,6 @@ export async function POST(
   { params }: { params: { id: string } }
 ) {
   try {
-    await dbConnectSimple()
-    
     // Get access token from cookies
     const accessToken = request.cookies.get('accessToken')?.value
     
@@ -35,8 +31,13 @@ export async function POST(
     const activityId = params.id
 
     // Find the activity
-    const activity = await Activity.findById(activityId).populate('userId', 'name email points totalPointsEarned level activitiesCompleted')
-    if (!activity) {
+    const { data: activity, error: activityError } = await supabase
+      .from('activities')
+      .select('*')
+      .eq('id', activityId)
+      .maybeSingle()
+
+    if (activityError || !activity) {
       return NextResponse.json(
         { error: 'Activity not found' },
         { status: 404 }
@@ -50,37 +51,88 @@ export async function POST(
       )
     }
 
-    // Update activity status
-    activity.status = 'approved'
-    activity.verifiedBy = currentUser.userId
-    activity.verifiedAt = new Date()
-    await activity.save()
+    // Find user
+    const { data: user, error: userError } = await supabase
+      .from('users')
+      .select('*')
+      .eq('id', activity.user_id)
+      .maybeSingle()
 
-    // Award points to user
-    const user = await User.findById(activity.userId)
-    if (user) {
-      user.points += activity.pointsEarned
-      user.totalPointsEarned += activity.pointsEarned
-      user.activitiesCompleted += 1
-      
-      // Calculate new level
-      user.level = Math.floor(user.totalPointsEarned / 100) + 1
-      
-      await user.save()
+    if (userError || !user) {
+      return NextResponse.json(
+        { error: 'User associated with activity not found' },
+        { status: 404 }
+      )
     }
 
-    const adminUser = await User.findById(currentUser.userId).select('name')
+    // Update activity status
+    const { data: updatedActivity, error: updateActError } = await supabase
+      .from('activities')
+      .update({
+        status: 'approved',
+        verified_by: currentUser.userId,
+        verified_at: new Date().toISOString(),
+      })
+      .eq('id', activityId)
+      .select()
+      .maybeSingle()
+
+    if (updateActError || !updatedActivity) {
+      console.error('Failed to update activity status:', updateActError)
+      return NextResponse.json({ error: 'Failed to approve activity' }, { status: 500 })
+    }
+
+    // Award points to user
+    const newPoints = user.points + activity.points_earned
+    const newTotal = user.total_points_earned + activity.points_earned
+    const newActivitiesCount = user.activities_completed + 1
+    const newLevel = Math.floor(newTotal / 100) + 1
+
+    const { data: updatedUser, error: updateUserError } = await supabase
+      .from('users')
+      .update({
+        points: newPoints,
+        total_points_earned: newTotal,
+        activities_completed: newActivitiesCount,
+        level: newLevel,
+      })
+      .eq('id', user.id)
+      .select()
+      .maybeSingle()
+
+    if (updateUserError || !updatedUser) {
+      console.error('Failed to update user points:', updateUserError)
+      // Rollback activity update if possible, though not strictly required, let's keep robust
+      await supabase
+        .from('activities')
+        .update({
+          status: 'pending',
+          verified_by: null,
+          verified_at: null,
+        })
+        .eq('id', activityId)
+
+      return NextResponse.json({ error: 'Failed to update user points' }, { status: 500 })
+    }
+
+    // Log audit
+    const { data: adminUser } = await supabase
+      .from('users')
+      .select('name')
+      .eq('id', currentUser.userId)
+      .maybeSingle()
+
     await createAuditLog({
       eventType: 'activity.approved',
       actorId: currentUser.userId,
       actorName: adminUser?.name || 'Admin',
       actorRole: 'admin',
       targetType: 'activity',
-      targetId: activity._id,
-      summary: `Approved "${activity.title}" for ${(activity.userId as { name?: string })?.name || 'user'} (+${activity.pointsEarned} pts)`,
+      targetId: activity.id,
+      summary: `Approved "${activity.title}" for ${user.name} (+${activity.points_earned} pts)`,
       metadata: {
-        pointsAwarded: activity.pointsEarned,
-        userId: activity.userId?.toString(),
+        pointsAwarded: activity.points_earned,
+        userId: user.id,
         activityTitle: activity.title,
       },
     })
@@ -88,16 +140,16 @@ export async function POST(
     return NextResponse.json({
       message: 'Activity approved successfully',
       activity: {
-        id: activity._id.toString(),
-        status: activity.status,
-        pointsEarned: activity.pointsEarned,
-        verifiedAt: activity.verifiedAt,
+        id: updatedActivity.id,
+        status: updatedActivity.status,
+        pointsEarned: updatedActivity.points_earned,
+        verifiedAt: updatedActivity.verified_at,
       },
-      pointsAwarded: activity.pointsEarned,
+      pointsAwarded: updatedActivity.points_earned,
       userStats: {
-        totalPoints: user?.points,
-        level: user?.level,
-        activitiesCompleted: user?.activitiesCompleted,
+        totalPoints: updatedUser.points,
+        level: updatedUser.level,
+        activitiesCompleted: updatedUser.activities_completed,
       }
     })
 

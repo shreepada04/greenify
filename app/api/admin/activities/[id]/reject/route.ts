@@ -1,17 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server'
-import dbConnectSimple from '@/app/lib/mongodb-simple'
-import Activity from '@/app/lib/models/Activity'
+import { supabase } from '@/app/lib/supabase'
 import { verifyAccessToken } from '@/app/lib/jwt'
 import { createAuditLog } from '@/app/lib/auditLog'
-import User from '@/app/lib/models/User'
 
 export async function POST(
   request: NextRequest,
   { params }: { params: { id: string } }
 ) {
   try {
-    await dbConnectSimple()
-    
     // Get access token from cookies
     const accessToken = request.cookies.get('accessToken')?.value
     
@@ -45,8 +41,13 @@ export async function POST(
     const activityId = params.id
 
     // Find the activity
-    const activity = await Activity.findById(activityId)
-    if (!activity) {
+    const { data: activity, error: activityError } = await supabase
+      .from('activities')
+      .select('*')
+      .eq('id', activityId)
+      .maybeSingle()
+
+    if (activityError || !activity) {
       return NextResponse.json(
         { error: 'Activity not found' },
         { status: 404 }
@@ -61,19 +62,52 @@ export async function POST(
     }
 
     // Update activity status
-    activity.status = 'rejected'
-    activity.verifiedBy = currentUser.userId
-    activity.verifiedAt = new Date()
-    activity.rejectionReason = reason.trim()
-    await activity.save()
+    const { data: updatedActivity, error: updateError } = await supabase
+      .from('activities')
+      .update({
+        status: 'rejected',
+        verified_by: currentUser.userId,
+        verified_at: new Date().toISOString(),
+        rejection_reason: reason.trim(),
+      })
+      .eq('id', activityId)
+      .select()
+      .maybeSingle()
+
+    if (updateError || !updatedActivity) {
+      console.error('Failed to update activity status:', updateError)
+      return NextResponse.json({ error: 'Failed to reject activity' }, { status: 500 })
+    }
+
+    // Log audit
+    const { data: adminUser } = await supabase
+      .from('users')
+      .select('name')
+      .eq('id', currentUser.userId)
+      .maybeSingle()
+
+    await createAuditLog({
+      eventType: 'activity.rejected',
+      actorId: currentUser.userId,
+      actorName: adminUser?.name || 'Admin',
+      actorRole: 'admin',
+      targetType: 'activity',
+      targetId: activity.id,
+      summary: `Rejected "${activity.title}" (Reason: ${reason.trim()})`,
+      metadata: {
+        userId: activity.user_id,
+        activityTitle: activity.title,
+        reason: reason.trim(),
+      },
+    })
 
     return NextResponse.json({
       message: 'Activity rejected successfully',
       activity: {
-        id: activity._id.toString(),
-        status: activity.status,
-        rejectionReason: activity.rejectionReason,
-        verifiedAt: activity.verifiedAt,
+        id: updatedActivity.id,
+        status: updatedActivity.status,
+        rejectionReason: updatedActivity.rejection_reason,
+        verifiedAt: updatedActivity.verified_at,
       }
     })
 

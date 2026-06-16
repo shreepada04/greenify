@@ -1,12 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
-import dbConnectSimple from '@/app/lib/mongodb-simple'
-import User from '@/app/lib/models/User'
+import { supabase } from '@/app/lib/supabase'
 import { generateTokenPair } from '@/app/lib/jwt'
+import bcrypt from 'bcryptjs'
 
 export async function POST(request: NextRequest) {
   try {
-    await dbConnectSimple()
-    
     const { email, password } = await request.json()
     console.log('Login attempt for:', email)
 
@@ -19,23 +17,31 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Find user in database (include password for verification)
-    const user = await User.findOne({ email: email.toLowerCase().trim() }).select('+password')
-    if (!user) {
+    const cleanEmail = email.toLowerCase().trim()
+
+    // Find user in database
+    const { data: user, error } = await supabase
+      .from('users')
+      .select('*')
+      .eq('email', cleanEmail)
+      .maybeSingle()
+
+    if (error || !user) {
+      console.log('User not found or query error:', email, error)
       return NextResponse.json(
         { error: 'Invalid email or password' },
         { status: 401 }
       )
     }
 
-    if (user.authProvider === 'google' && !user.password) {
+    if (user.auth_provider === 'google' && !user.password) {
       return NextResponse.json(
         { error: 'This account uses Google sign-in. Please use Continue with Google.' },
         { status: 400 }
       )
     }
 
-    const isPasswordValid = await user.comparePassword(password)
+    const isPasswordValid = await bcrypt.compare(password, user.password)
     if (!isPasswordValid) {
       console.log('Password comparison failed for:', email)
       return NextResponse.json(
@@ -46,27 +52,27 @@ export async function POST(request: NextRequest) {
 
     // Generate access and refresh tokens
     const { accessToken, refreshToken } = generateTokenPair({
-      userId: user._id.toString(),
+      userId: user.id,
       email: user.email,
-      role: user.role
+      role: user.role,
     }, 0)
 
     // Return user data (without password) and tokens
     const userData = {
-      id: user._id.toString(),
+      id: user.id,
       name: user.name,
       email: user.email,
       role: user.role,
       points: user.points,
-      totalPointsEarned: user.totalPointsEarned,
+      totalPointsEarned: user.total_points_earned,
       level: user.level,
-      activitiesCompleted: user.activitiesCompleted
+      activitiesCompleted: user.activities_completed,
     }
 
     // Set both access and refresh tokens as httpOnly cookies
     const response = NextResponse.json({ 
       user: userData,
-      message: 'Login successful'
+      message: 'Login successful',
     })
 
     // Set access token cookie

@@ -1,13 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
-import dbConnectSimple from '@/app/lib/mongodb-simple'
-import Activity from '@/app/lib/models/Activity'
-import User from '@/app/lib/models/User'
+import { supabase } from '@/app/lib/supabase'
 import { verifyAccessToken } from '@/app/lib/jwt'
 
 export async function GET(request: NextRequest) {
   try {
-    await dbConnectSimple()
-    
     // Get access token from cookies
     const accessToken = request.cookies.get('accessToken')?.value
     
@@ -35,51 +31,80 @@ export async function GET(request: NextRequest) {
     const type = searchParams.get('type')
 
     // Build query
-    const query: any = {}
-    if (status !== 'all') query.status = status
-    if (type) query.type = type
+    let queryBuilder = supabase
+      .from('activities')
+      .select('*', { count: 'exact' })
 
-    // Get activities with pagination
+    if (status !== 'all') {
+      queryBuilder = queryBuilder.eq('status', status)
+    }
+    if (type) {
+      queryBuilder = queryBuilder.eq('type', type)
+    }
+
     const skip = (page - 1) * limit
-    const activities = await Activity.find(query)
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limit)
-      .populate('userId', 'name email')
-      .populate('verifiedBy', 'name email')
+    const { data: activities, error, count } = await queryBuilder
+      .order('created_at', { ascending: false })
+      .range(skip, skip + limit - 1)
 
-    const total = await Activity.countDocuments(query)
-    const pages = Math.ceil(total / limit)
+    if (error || !activities) {
+      console.error('Admin activities query error:', error)
+      return NextResponse.json({ error: 'Failed to retrieve activities' }, { status: 500 })
+    }
 
-    // Transform activities for response
+    // Collect all user IDs involved
+    const userIds = new Set<string>()
+    activities.forEach(a => {
+      if (a.user_id) userIds.add(a.user_id)
+      if (a.verified_by) userIds.add(a.verified_by)
+    })
+
+    const userIdsArray = Array.from(userIds)
+    const usersMap: Record<string, { id: string; name: string; email: string }> = {}
+
+    if (userIdsArray.length > 0) {
+      const { data: usersData } = await supabase
+        .from('users')
+        .select('id, name, email')
+        .in('id', userIdsArray)
+
+      if (usersData) {
+        usersData.forEach(u => {
+          usersMap[u.id] = u
+        })
+      }
+    }
+
+    // Transform activities
     const transformedActivities = activities.map(activity => ({
-      id: activity._id.toString(),
+      id: activity.id,
       type: activity.type,
       title: activity.title,
       description: activity.description,
-      pointsEarned: activity.pointsEarned,
+      pointsEarned: activity.points_earned,
       quantity: activity.quantity,
       unit: activity.unit,
-      verificationMedia: activity.verificationMedia,
+      verificationMedia: activity.verification_media,
       location: activity.location,
       status: activity.status,
-      carbonSaved: activity.carbonSaved,
-      submittedAt: activity.submittedAt,
-      verifiedAt: activity.verifiedAt,
-      verifiedBy: activity.verifiedBy,
-      rejectionReason: activity.rejectionReason,
-      mediaVerification: activity.mediaVerification,
-      createdAt: activity.createdAt,
-      updatedAt: activity.updatedAt,
-      user:
-        activity.userId && typeof activity.userId === 'object'
-          ? {
-              id: activity.userId._id?.toString(),
-              name: activity.userId.name,
-              email: activity.userId.email,
-            }
-          : null,
+      carbonSaved: activity.carbon_saved,
+      submittedAt: activity.submitted_at,
+      verifiedAt: activity.verified_at,
+      verifiedBy: activity.verified_by ? usersMap[activity.verified_by] || null : null,
+      rejectionReason: activity.rejection_reason,
+      mediaVerification: activity.media_verification,
+      createdAt: activity.created_at,
+      updatedAt: activity.updated_at,
+      user: activity.user_id ? usersMap[activity.user_id] || null : null,
     }))
+
+    // Get counts for admin stats sidebar
+    const { count: pendingCount } = await supabase.from('activities').select('id', { count: 'exact', head: true }).eq('status', 'pending')
+    const { count: approvedCount } = await supabase.from('activities').select('id', { count: 'exact', head: true }).eq('status', 'approved')
+    const { count: rejectedCount } = await supabase.from('activities').select('id', { count: 'exact', head: true }).eq('status', 'rejected')
+
+    const total = count || 0
+    const pages = Math.ceil(total / limit)
 
     return NextResponse.json({
       activities: transformedActivities,
@@ -92,9 +117,9 @@ export async function GET(request: NextRequest) {
         hasPrev: page > 1,
       },
       stats: {
-        pending: await Activity.countDocuments({ status: 'pending' }),
-        approved: await Activity.countDocuments({ status: 'approved' }),
-        rejected: await Activity.countDocuments({ status: 'rejected' }),
+        pending: pendingCount || 0,
+        approved: approvedCount || 0,
+        rejected: rejectedCount || 0,
       }
     })
 

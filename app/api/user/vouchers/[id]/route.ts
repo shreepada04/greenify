@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import dbConnectSimple from '@/app/lib/mongodb-simple'
-import UserReward from '@/app/lib/models/UserReward'
+import { supabase } from '@/app/lib/supabase'
 import { verifyAccessToken } from '@/app/lib/jwt'
 
 export async function PATCH(
@@ -8,8 +7,6 @@ export async function PATCH(
   { params }: { params: { id: string } }
 ) {
   try {
-    await dbConnectSimple()
-
     const accessToken = request.cookies.get('accessToken')?.value
     if (!accessToken) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -27,25 +24,43 @@ export async function PATCH(
       return NextResponse.json({ error: 'Invalid status' }, { status: 400 })
     }
 
-    const voucher = await UserReward.findOne({
-      _id: params.id,
-      userId: currentUser.userId,
-    })
+    // Find the voucher in Supabase first to ensure ownership
+    const { data: voucher, error: fetchError } = await supabase
+      .from('user_rewards')
+      .select('*')
+      .eq('id', params.id)
+      .eq('user_id', currentUser.userId)
+      .maybeSingle()
 
-    if (!voucher) {
+    if (fetchError || !voucher) {
       return NextResponse.json({ error: 'Voucher not found' }, { status: 404 })
     }
 
-    voucher.status = status
-    if (status === 'used') voucher.usedAt = new Date()
-    await voucher.save()
+    const isRedeemed = status === 'used'
+    const redeemedAt = status === 'used' ? new Date().toISOString() : null
+
+    // Update in Supabase
+    const { data: updated, error: updateError } = await supabase
+      .from('user_rewards')
+      .update({
+        is_redeemed: isRedeemed,
+        redeemed_at: redeemedAt,
+      })
+      .eq('id', params.id)
+      .select()
+      .maybeSingle()
+
+    if (updateError || !updated) {
+      console.error('Failed to update voucher status:', updateError)
+      return NextResponse.json({ error: 'Failed to update voucher' }, { status: 500 })
+    }
 
     return NextResponse.json({
       message: 'Voucher updated',
       voucher: {
-        id: voucher._id.toString(),
-        status: voucher.status,
-        usedAt: voucher.usedAt,
+        id: updated.id,
+        status: status,
+        usedAt: updated.redeemed_at,
       },
     })
   } catch (error) {

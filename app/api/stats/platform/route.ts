@@ -1,179 +1,202 @@
 import { NextRequest, NextResponse } from 'next/server'
-import dbConnect from '@/app/lib/mongodb-simple'
-import Activity from '@/app/lib/models/Activity'
-import User from '@/app/lib/models/User'
-import Reward from '@/app/lib/models/Reward'
+import { supabase } from '@/app/lib/supabase'
 
 export async function GET(request: NextRequest) {
   try {
-    await dbConnect()
-
-    // Get platform statistics
-    const [
-      totalUsers,
-      totalActivities,
-      approvedActivities,
-      totalCarbonSaved,
-      totalPointsAwarded,
-      totalRewards,
-      activeUsers,
-      recentActivities
-    ] = await Promise.all([
-      User.countDocuments(),
-      Activity.countDocuments(),
-      Activity.countDocuments({ status: 'approved' }),
-      Activity.aggregate([
-        { $match: { status: 'approved' } },
-        { $group: { _id: null, total: { $sum: '$carbonSaved' } } }
-      ]),
-      Activity.aggregate([
-        { $match: { status: 'approved' } },
-        { $group: { _id: null, total: { $sum: '$pointsEarned' } } }
-      ]),
-      Reward.countDocuments({ isActive: true }),
-      User.countDocuments({ 
-        updatedAt: { 
-          $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) // Last 30 days
-        } 
-      }),
-      Activity.find({ status: 'approved' })
-        .sort({ verifiedAt: -1 })
-        .limit(10)
-        .populate('userId', 'name')
-        .select('type title pointsEarned carbonSaved verifiedAt userId')
-        .lean()
-    ])
-
-    // Calculate activity type breakdown
-    const activityTypeStats = await Activity.aggregate([
-      { $match: { status: 'approved' } },
-      { 
-        $group: { 
-          _id: '$type', 
-          count: { $sum: 1 },
-          totalPoints: { $sum: '$pointsEarned' },
-          totalCarbon: { $sum: '$carbonSaved' }
-        } 
-      },
-      { $sort: { count: -1 } }
-    ])
-
-    // Calculate monthly growth (last 12 months)
     const twelveMonthsAgo = new Date()
     twelveMonthsAgo.setMonth(twelveMonthsAgo.getMonth() - 12)
 
-    const monthlyGrowth = await Promise.all([
-      // User growth
-      User.aggregate([
-        { 
-          $match: { 
-            createdAt: { $gte: twelveMonthsAgo }
-          } 
-        },
-        {
-          $group: {
-            _id: {
-              year: { $year: '$createdAt' },
-              month: { $month: '$createdAt' }
-            },
-            newUsers: { $sum: 1 }
-          }
-        },
-        { $sort: { '_id.year': 1, '_id.month': 1 } }
-      ]),
-      // Activity growth
-      Activity.aggregate([
-        { 
-          $match: { 
-            status: 'approved',
-            verifiedAt: { $gte: twelveMonthsAgo }
-          } 
-        },
-        {
-          $group: {
-            _id: {
-              year: { $year: '$verifiedAt' },
-              month: { $month: '$verifiedAt' }
-            },
-            activities: { $sum: 1 },
-            carbonSaved: { $sum: '$carbonSaved' }
-          }
-        },
-        { $sort: { '_id.year': 1, '_id.month': 1 } }
-      ])
+    // Run primary counts and fetch approved activities in parallel
+    const [
+      { count: totalUsers },
+      { count: totalActivities },
+      { count: approvedCount },
+      { data: approvedActs, error: approvedError },
+      { count: activeRewards },
+      { count: activeUsers },
+      { data: recentUsers },
+    ] = await Promise.all([
+      supabase.from('users').select('id', { count: 'exact', head: true }),
+      supabase.from('activities').select('id', { count: 'exact', head: true }),
+      supabase.from('activities').select('id', { count: 'exact', head: true }).eq('status', 'approved'),
+      supabase.from('activities').select('type, quantity, points_earned, carbon_saved, verified_at, user_id, submitted_at').eq('status', 'approved'),
+      supabase.from('rewards').select('id', { count: 'exact', head: true }).eq('is_active', true),
+      supabase.from('users').select('id', { count: 'exact', head: true }).gte('updated_at', new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()),
+      supabase.from('users').select('created_at').gte('created_at', twelveMonthsAgo.toISOString()),
     ])
 
-    // Calculate top performers (users with most points this month)
+    if (approvedError || !approvedActs) {
+      console.error('Approved activities fetch error:', approvedError)
+      return NextResponse.json({ error: 'Failed to fetch platform stats' }, { status: 500 })
+    }
+
+    // Calculations in JS
+    const approvedActivities = approvedCount || 0
+    const totalCarbonSaved = approvedActs.reduce((acc, act) => acc + (Number(act.carbon_saved) || 0), 0)
+    const totalPointsAwarded = approvedActs.reduce((acc, act) => acc + (act.points_earned || 0), 0)
+
+    // Activity type stats
+    const typeStats: Record<string, { count: number; totalPoints: number; totalCarbon: number }> = {}
+    approvedActs.forEach(act => {
+      if (!typeStats[act.type]) {
+        typeStats[act.type] = { count: 0, totalPoints: 0, totalCarbon: 0 }
+      }
+      typeStats[act.type].count++
+      typeStats[act.type].totalPoints += act.points_earned || 0
+      typeStats[act.type].totalCarbon += Number(act.carbon_saved) || 0
+    })
+    const activityTypeStats = Object.entries(typeStats).map(([type, stats]) => ({
+      _id: type,
+      count: stats.count,
+      totalPoints: stats.totalPoints,
+      totalCarbon: stats.totalCarbon,
+    })).sort((a, b) => b.count - a.count)
+
+    // Monthly growth for users
+    const userGrowthMap: Record<string, { year: number; month: number; newUsers: number }> = {}
+    if (recentUsers) {
+      recentUsers.forEach(u => {
+        const date = new Date(u.created_at)
+        const key = `${date.getFullYear()}-${date.getMonth() + 1}`
+        if (!userGrowthMap[key]) {
+          userGrowthMap[key] = { year: date.getFullYear(), month: date.getMonth() + 1, newUsers: 0 }
+        }
+        userGrowthMap[key].newUsers++
+      })
+    }
+    const userGrowth = Object.values(userGrowthMap)
+      .sort((a, b) => a.year - b.year || a.month - b.month)
+      .map(item => ({
+        _id: { year: item.year, month: item.month },
+        newUsers: item.newUsers,
+      }))
+
+    // Monthly growth for activities
+    const actGrowthMap: Record<string, { year: number; month: number; activities: number; carbonSaved: number }> = {}
+    approvedActs.forEach(act => {
+      if (act.verified_at && new Date(act.verified_at) >= twelveMonthsAgo) {
+        const date = new Date(act.verified_at)
+        const key = `${date.getFullYear()}-${date.getMonth() + 1}`
+        if (!actGrowthMap[key]) {
+          actGrowthMap[key] = { year: date.getFullYear(), month: date.getMonth() + 1, activities: 0, carbonSaved: 0 }
+        }
+        actGrowthMap[key].activities++
+        actGrowthMap[key].carbonSaved += Number(act.carbon_saved) || 0
+      }
+    })
+    const actGrowth = Object.values(actGrowthMap)
+      .sort((a, b) => a.year - b.year || a.month - b.month)
+      .map(item => ({
+        _id: { year: item.year, month: item.month },
+        activities: item.activities,
+        carbonSaved: item.carbonSaved,
+      }))
+
+    // Top Performers (users with most points approved this month)
     const thisMonth = new Date()
     thisMonth.setDate(1)
     thisMonth.setHours(0, 0, 0, 0)
 
-    const topPerformers = await Activity.aggregate([
-      { 
-        $match: { 
-          status: 'approved',
-          verifiedAt: { $gte: thisMonth }
-        } 
-      },
-      {
-        $group: {
-          _id: '$userId',
-          monthlyPoints: { $sum: '$pointsEarned' },
-          monthlyActivities: { $sum: 1 },
-          monthlyCarbon: { $sum: '$carbonSaved' }
+    const performersMap: Record<string, { userId: string; monthlyPoints: number; monthlyActivities: number; monthlyCarbon: number }> = {}
+    approvedActs.forEach(act => {
+      if (act.verified_at && new Date(act.verified_at) >= thisMonth) {
+        const uid = act.user_id
+        if (!performersMap[uid]) {
+          performersMap[uid] = { userId: uid, monthlyPoints: 0, monthlyActivities: 0, monthlyCarbon: 0 }
         }
-      },
-      { $sort: { monthlyPoints: -1 } },
-      { $limit: 10 },
-      {
-        $lookup: {
-          from: 'users',
-          localField: '_id',
-          foreignField: '_id',
-          as: 'user'
-        }
-      },
-      { $unwind: '$user' },
-      {
-        $project: {
-          name: '$user.name',
-          monthlyPoints: 1,
-          monthlyActivities: 1,
-          monthlyCarbon: 1,
-          totalPoints: '$user.totalPointsEarned',
-          level: '$user.level'
-        }
+        performersMap[uid].monthlyPoints += act.points_earned || 0
+        performersMap[uid].monthlyActivities++
+        performersMap[uid].monthlyCarbon += Number(act.carbon_saved) || 0
       }
-    ])
-
-    return NextResponse.json({
-      overview: {
-        totalUsers,
-        totalActivities,
-        approvedActivities,
-        totalCarbonSaved: totalCarbonSaved[0]?.total || 0,
-        totalPointsAwarded: totalPointsAwarded[0]?.total || 0,
-        totalRewards,
-        activeUsers,
-        approvalRate: totalActivities > 0 ? Math.round((approvedActivities / totalActivities) * 100) : 0
-      },
-      activityTypeStats,
-      monthlyGrowth: {
-        users: monthlyGrowth[0],
-        activities: monthlyGrowth[1]
-      },
-      topPerformers,
-      recentActivities: recentActivities.map((activity: any) => ({
-        id: activity._id.toString(),
-        type: activity.type,
-        title: activity.title,
-        pointsEarned: activity.pointsEarned,
-        carbonSaved: activity.carbonSaved,
-        verifiedAt: activity.verifiedAt,
-        user: activity.userId?.name || 'Unknown User'
-      }))
     })
 
+    const performersArray = Object.values(performersMap)
+      .sort((a, b) => b.monthlyPoints - a.monthlyPoints)
+      .slice(0, 10)
+
+    const topPerformers: any[] = []
+    if (performersArray.length > 0) {
+      const { data: usersData } = await supabase
+        .from('users')
+        .select('id, name, total_points_earned, level')
+        .in('id', performersArray.map(p => p.userId))
+
+      if (usersData) {
+        const uMap = new Map(usersData.map(u => [u.id, u]))
+        performersArray.forEach(p => {
+          const u = uMap.get(p.userId)
+          if (u) {
+            topPerformers.push({
+              name: u.name,
+              monthlyPoints: p.monthlyPoints,
+              monthlyActivities: p.monthlyActivities,
+              monthlyCarbon: p.monthlyCarbon,
+              totalPoints: u.total_points_earned,
+              level: u.level,
+            })
+          }
+        })
+      }
+    }
+
+    // Recent 10 approved activities
+    const { data: recentActs } = await supabase
+      .from('activities')
+      .select('id, type, title, points_earned, carbon_saved, verified_at, user_id')
+      .eq('status', 'approved')
+      .order('verified_at', { ascending: false })
+      .limit(10)
+
+    const recentActivities: any[] = []
+    if (recentActs && recentActs.length > 0) {
+      const recentUserIds = Array.from(new Set(recentActs.map(a => a.user_id).filter(Boolean)))
+      const recentUsersMap: Record<string, string> = {}
+      if (recentUserIds.length > 0) {
+        const { data: recentUsersList } = await supabase
+          .from('users')
+          .select('id, name')
+          .in('id', recentUserIds)
+        if (recentUsersList) {
+          recentUsersList.forEach(u => {
+            recentUsersMap[u.id] = u.name
+          })
+        }
+      }
+
+      recentActs.forEach(activity => {
+        recentActivities.push({
+          id: activity.id,
+          type: activity.type,
+          title: activity.title,
+          pointsEarned: activity.points_earned,
+          carbonSaved: activity.carbon_saved,
+          verifiedAt: activity.verified_at,
+          user: activity.user_id ? recentUsersMap[activity.user_id] || 'Unknown User' : 'Unknown User',
+        })
+      })
+    }
+
+    const overview = {
+      totalUsers: totalUsers || 0,
+      totalActivities: totalActivities || 0,
+      approvedActivities,
+      totalCarbonSaved,
+      totalPointsAwarded,
+      totalRewards: activeRewards || 0,
+      activeUsers: activeUsers || 0,
+      approvalRate: totalActivities && totalActivities > 0 ? Math.round((approvedActivities / totalActivities) * 100) : 0,
+    }
+
+    return NextResponse.json({
+      overview,
+      activityTypeStats,
+      monthlyGrowth: {
+        users: userGrowth,
+        activities: actGrowth,
+      },
+      topPerformers,
+      recentActivities,
+    })
   } catch (error) {
     console.error('Get platform stats error:', error)
     return NextResponse.json(

@@ -1,124 +1,154 @@
 import { NextRequest, NextResponse } from 'next/server'
-import dbConnectSimple from '@/app/lib/mongodb-simple'
-import Partner from '@/app/lib/models/Partner'
-import PartnerClaim from '@/app/lib/models/PartnerClaim'
-import { requireAuth } from '@/app/lib/jwt'
+import { supabase } from '@/app/lib/supabase'
+import { verifyAccessToken } from '@/app/lib/jwt'
 
 const DEFAULT_PARTNERS = [
   {
     name: 'Amazon',
     slug: 'amazon',
     description: 'Earn eco points when you shop sustainable products on Amazon',
-    logoUrl: 'https://upload.wikimedia.org/wikipedia/commons/a/a9/Amazon_logo.svg',
-    brandColor: '#FF9900',
-    websiteUrl: 'https://www.amazon.in',
+    logo_url: 'https://upload.wikimedia.org/wikipedia/commons/a/a9/Amazon_logo.svg',
+    brand_color: '#FF9900',
+    website_url: 'https://www.amazon.in',
     category: 'shopping',
-    pointsReward: 50,
-    actionLabel: 'Shop on Amazon',
+    points_reward: 50,
+    action_label: 'Shop on Amazon',
     featured: true,
+    active: true,
   },
   {
     name: 'Microsoft Store',
     slug: 'microsoft',
     description: 'Like Microsoft Rewards — earn points for eco-friendly tech purchases',
-    logoUrl: 'https://upload.wikimedia.org/wikipedia/commons/4/44/Microsoft_logo.svg',
-    brandColor: '#00A4EF',
-    websiteUrl: 'https://www.microsoft.com',
+    logo_url: 'https://upload.wikimedia.org/wikipedia/commons/4/44/Microsoft_logo.svg',
+    brand_color: '#00A4EF',
+    website_url: 'https://www.microsoft.com',
     category: 'electronics',
-    pointsReward: 75,
-    actionLabel: 'Browse Microsoft',
+    points_reward: 75,
+    action_label: 'Browse Microsoft',
     featured: true,
+    active: true,
   },
   {
     name: 'Flipkart',
     slug: 'flipkart',
     description: 'Shop green products and claim bonus eco points',
-    logoUrl: 'https://upload.wikimedia.org/wikipedia/en/7/7a/Flipkart_logo.png',
-    brandColor: '#2874F0',
-    websiteUrl: 'https://www.flipkart.com',
+    logo_url: 'https://upload.wikimedia.org/wikipedia/en/7/7a/Flipkart_logo.png',
+    brand_color: '#2874F0',
+    website_url: 'https://www.flipkart.com',
     category: 'shopping',
-    pointsReward: 40,
-    actionLabel: 'Shop Flipkart',
+    points_reward: 40,
+    action_label: 'Shop Flipkart',
     featured: true,
+    active: true,
   },
   {
     name: 'Myntra',
     slug: 'myntra',
     description: 'Sustainable fashion purchases earn extra rewards',
-    logoUrl: 'https://upload.wikimedia.org/wikipedia/commons/c/c8/Myntra_logo.png',
-    brandColor: '#FF3F6C',
-    websiteUrl: 'https://www.myntra.com',
+    logo_url: 'https://upload.wikimedia.org/wikipedia/commons/c/c8/Myntra_logo.png',
+    brand_color: '#FF3F6C',
+    website_url: 'https://www.myntra.com',
     category: 'fashion',
-    pointsReward: 35,
-    actionLabel: 'Shop Myntra',
+    points_reward: 35,
+    action_label: 'Shop Myntra',
     featured: false,
+    active: true,
   },
   {
     name: 'Swiggy',
     slug: 'swiggy',
     description: 'Order from eco-certified restaurants and earn points',
-    logoUrl: 'https://upload.wikimedia.org/wikipedia/en/1/12/Swiggy_logo.png',
-    brandColor: '#FC8019',
-    websiteUrl: 'https://www.swiggy.com',
+    logo_url: 'https://upload.wikimedia.org/wikipedia/en/1/12/Swiggy_logo.png',
+    brand_color: '#FC8019',
+    website_url: 'https://www.swiggy.com',
     category: 'food',
-    pointsReward: 25,
-    actionLabel: 'Order Food',
+    points_reward: 25,
+    action_label: 'Order Food',
     featured: false,
+    active: true,
   },
   {
     name: 'MakeMyTrip',
     slug: 'makemytrip',
     description: 'Book eco-travel options and redeem voucher points',
-    logoUrl: 'https://upload.wikimedia.org/wikipedia/commons/8/8a/MakeMyTrip_logo.png',
-    brandColor: '#008CFF',
-    websiteUrl: 'https://www.makemytrip.com',
+    logo_url: 'https://upload.wikimedia.org/wikipedia/commons/8/8a/MakeMyTrip_logo.png',
+    brand_color: '#008CFF',
+    website_url: 'https://www.makemytrip.com',
     category: 'travel',
-    pointsReward: 100,
-    actionLabel: 'Book Travel',
+    points_reward: 100,
+    action_label: 'Book Travel',
     featured: true,
+    active: true,
   },
 ]
 
 async function ensurePartners() {
-  const count = await Partner.countDocuments()
-  if (count === 0) {
-    await Partner.insertMany(DEFAULT_PARTNERS)
+  try {
+    const { count, error } = await supabase
+      .from('partners')
+      .select('id', { count: 'exact', head: true })
+    
+    if (!error && (count === 0 || count === null)) {
+      await supabase.from('partners').insert(DEFAULT_PARTNERS)
+    }
+  } catch (err) {
+    console.error('Error ensuring default partners:', err)
   }
 }
 
 export async function GET(request: NextRequest) {
   try {
-    await dbConnectSimple()
     await ensurePartners()
 
-    const currentUser = requireAuth(request)
-    const partners = await Partner.find({ active: true }).sort({ featured: -1, pointsReward: -1 })
+    const accessToken = request.cookies.get('accessToken')?.value
+    const currentUser = accessToken ? verifyAccessToken(accessToken) : null
 
-    let recentClaims: Record<string, Date> = {}
+    const { data: partners, error } = await supabase
+      .from('partners')
+      .select('*')
+      .eq('active', true)
+      .order('featured', { ascending: false })
+      .order('points_reward', { ascending: false })
+
+    if (error || !partners) {
+      console.error('Partners GET query error:', error)
+      return NextResponse.json({ error: 'Failed to retrieve partners' }, { status: 500 })
+    }
+
+    let recentClaims: Record<string, string> = {}
     if (currentUser) {
-      const claims = await PartnerClaim.find({ userId: currentUser.userId })
-        .sort({ claimedAt: -1 })
+      const { data: claims } = await supabase
+        .from('partner_claims')
+        .select('*')
+        .eq('user_id', currentUser.userId)
+        .order('claimed_at', { ascending: false })
         .limit(50)
-      for (const c of claims) {
-        const key = c.partnerId.toString()
-        if (!recentClaims[key]) recentClaims[key] = c.claimedAt
+      
+      if (claims) {
+        claims.forEach((c) => {
+          const key = String(c.partner_id)
+          if (!recentClaims[key]) {
+            recentClaims[key] = c.claimed_at
+          }
+        })
       }
     }
 
     return NextResponse.json({
       partners: partners.map((p) => ({
-        id: p._id.toString(),
+        id: p.id,
         name: p.name,
         slug: p.slug,
         description: p.description,
-        logoUrl: p.logoUrl,
-        brandColor: p.brandColor,
-        websiteUrl: p.websiteUrl,
+        logoUrl: p.logo_url,
+        brandColor: p.brand_color,
+        websiteUrl: p.website_url,
         category: p.category,
-        pointsReward: p.pointsReward,
-        actionLabel: p.actionLabel,
+        pointsReward: p.points_reward,
+        actionLabel: p.action_label,
         featured: p.featured,
-        lastClaimedAt: recentClaims[p._id.toString()] || null,
+        lastClaimedAt: recentClaims[p.id] || null,
       })),
     })
   } catch (error) {
