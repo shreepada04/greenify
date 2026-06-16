@@ -1,7 +1,7 @@
 'use client'
 
-import { useState, useRef } from 'react'
-import { Upload, X, Image, Video, File, MapPin, Shield, AlertTriangle, Loader2 } from 'lucide-react'
+import { useState, useRef, useEffect } from 'react'
+import { Upload, X, Image, Video, MapPin, Shield, AlertTriangle, Loader2, Camera, RefreshCw } from 'lucide-react'
 import { hashFileContent, hashFilePerceptual, extractExifGeo } from '@/app/lib/clientMediaUtils'
 
 export interface VerifiedMediaFile {
@@ -35,11 +35,101 @@ export default function MediaUpload({
   const [files, setFiles] = useState<VerifiedMediaFile[]>([])
   const [dragActive, setDragActive] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  
+  // Camera state
+  const [isCameraOpen, setIsCameraOpen] = useState(false)
+  const [cameraStream, setCameraStream] = useState<MediaStream | null>(null)
+  const [facingMode, setFacingMode] = useState<'user' | 'environment'>('environment')
+  const videoRef = useRef<HTMLVideoElement>(null)
 
   const updateFiles = (updated: VerifiedMediaFile[]) => {
     setFiles(updated)
     onFilesChange(updated)
   }
+
+  const startCamera = async (mode = facingMode) => {
+    try {
+      // Stop any existing stream
+      if (cameraStream) {
+        cameraStream.getTracks().forEach(track => track.stop())
+      }
+
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: mode },
+        audio: false,
+      })
+
+      setCameraStream(stream)
+      setIsCameraOpen(true)
+      
+      // Delay slightly to ensure video element is rendered and bound
+      setTimeout(() => {
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream
+        }
+      }, 100)
+    } catch (err) {
+      console.error('Camera access error:', err)
+      alert('Could not access your camera. Please check camera permissions or upload a photo instead.')
+    }
+  }
+
+  const stopCamera = () => {
+    if (cameraStream) {
+      cameraStream.getTracks().forEach(track => track.stop())
+    }
+    setCameraStream(null)
+    setIsCameraOpen(false)
+  }
+
+  const toggleCamera = () => {
+    const nextMode = facingMode === 'user' ? 'environment' : 'user'
+    setFacingMode(nextMode)
+    startCamera(nextMode)
+  }
+
+  const capturePhoto = () => {
+    if (videoRef.current) {
+      const video = videoRef.current
+      const canvas = document.createElement('canvas')
+      
+      // Set canvas size to match video resolution
+      canvas.width = video.videoWidth || 640
+      canvas.height = video.videoHeight || 480
+      
+      const ctx = canvas.getContext('2d')
+      if (ctx) {
+        // Draw the current video frame to canvas
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+        
+        // Convert to Blob and process
+        canvas.toBlob(
+          (blob) => {
+            if (blob) {
+              const file = new File(
+                [blob], 
+                `live_capture_${Date.now()}.jpg`, 
+                { type: 'image/jpeg' }
+              )
+              processFile(file)
+              stopCamera()
+            }
+          },
+          'image/jpeg',
+          0.92
+        )
+      }
+    }
+  }
+
+  // Cleanup camera stream on unmount
+  useEffect(() => {
+    return () => {
+      if (cameraStream) {
+        cameraStream.getTracks().forEach(track => track.stop())
+      }
+    }
+  }, [cameraStream])
 
   const uploadToImageKit = async (mediaFile: VerifiedMediaFile): Promise<VerifiedMediaFile> => {
     const contentHash = await hashFileContent(mediaFile.file)
@@ -132,37 +222,126 @@ export default function MediaUpload({
 
   return (
     <div className="space-y-4">
-      <div
-        className={`border-2 border-dashed rounded-lg p-6 text-center cursor-pointer transition-colors ${
-          dragActive
-            ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20'
-            : 'border-gray-300 dark:border-gray-600 hover:border-primary-400'
-        }`}
-        onDrop={(e) => {
-          e.preventDefault()
-          setDragActive(false)
-          if (e.dataTransfer.files) handleFiles(e.dataTransfer.files)
-        }}
-        onDragOver={(e) => { e.preventDefault(); setDragActive(true) }}
-        onDragLeave={() => setDragActive(false)}
-        onClick={() => fileInputRef.current?.click()}
-      >
-        <Upload className="h-8 w-8 text-gray-400 mx-auto mb-2" />
-        <p className="text-sm text-gray-600 dark:text-gray-300 mb-1">
-          Upload live geotagged photos (ImageKit + anti-reuse fingerprint)
-        </p>
-        <p className="text-xs text-gray-500">Max {maxFiles} files • Enable camera GPS • Fresh photos only</p>
-        <input
-          ref={fileInputRef}
-          type="file"
-          multiple
-          accept={acceptedTypes.join(',')}
-          capture="environment"
-          onChange={(e) => e.target.files && handleFiles(e.target.files)}
-          className="hidden"
-        />
+      {/* Selection / Upload Interface */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        {/* File Drag & Drop / Input */}
+        <div
+          className={`col-span-1 md:col-span-2 border-2 border-dashed rounded-lg p-6 text-center cursor-pointer transition-colors ${
+            dragActive
+              ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20'
+              : 'border-gray-300 dark:border-gray-600 hover:border-primary-400 hover:bg-gray-50/50 dark:hover:bg-gray-800/20'
+          }`}
+          onDrop={(e) => {
+            e.preventDefault()
+            setDragActive(false)
+            if (e.dataTransfer.files) handleFiles(e.dataTransfer.files)
+          }}
+          onDragOver={(e) => { e.preventDefault(); setDragActive(true) }}
+          onDragLeave={() => setDragActive(false)}
+          onClick={() => fileInputRef.current?.click()}
+        >
+          <Upload className="h-8 w-8 text-gray-400 mx-auto mb-2" />
+          <p className="text-sm font-medium text-gray-700 dark:text-gray-200 mb-1">
+            Choose or drop files to upload
+          </p>
+          <p className="text-xs text-gray-500 dark:text-gray-400">
+            Max {maxFiles} files • JPG, PNG, MP4
+          </p>
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            accept={acceptedTypes.join(',')}
+            onChange={(e) => e.target.files && handleFiles(e.target.files)}
+            className="hidden"
+          />
+        </div>
+
+        {/* Live Camera Button */}
+        <button
+          type="button"
+          onClick={() => startCamera()}
+          className="col-span-1 flex flex-col items-center justify-center p-6 border-2 border-dashed border-gray-300 dark:border-gray-600 hover:border-green-500 rounded-lg hover:bg-green-50/25 dark:hover:bg-green-950/10 transition-colors"
+        >
+          <Camera className="h-8 w-8 text-green-500 mb-2" />
+          <p className="text-sm font-semibold text-green-600 dark:text-green-400 mb-1">Take Live Photo</p>
+          <p className="text-xs text-gray-500 dark:text-gray-400 text-center">
+            Use your phone/device camera directly
+          </p>
+        </button>
       </div>
 
+      {/* Live Camera Modal Overlay */}
+      {isCameraOpen && (
+        <div className="fixed inset-0 bg-black/85 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
+          <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden max-w-md w-full flex flex-col shadow-2xl">
+            {/* Header */}
+            <div className="p-4 border-b border-gray-800 flex justify-between items-center bg-gray-950">
+              <div className="flex items-center gap-2">
+                <Camera className="h-5 w-5 text-green-500" />
+                <span className="text-sm font-semibold text-white">Live Camera Capture</span>
+              </div>
+              <button 
+                type="button" 
+                onClick={stopCamera}
+                className="text-gray-400 hover:text-white transition-colors"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {/* Video Viewport */}
+            <div className="relative aspect-[4/3] bg-black flex items-center justify-center">
+              <video 
+                ref={videoRef}
+                autoPlay 
+                playsInline 
+                muted
+                className="w-full h-full object-cover"
+              />
+              
+              {/* Target Outline Indicator */}
+              <div className="absolute inset-8 border border-white/20 rounded-lg pointer-events-none flex items-center justify-center">
+                <p className="text-[10px] text-white/40 tracking-wider uppercase font-semibold">Position Eco-Evidence Here</p>
+              </div>
+            </div>
+
+            {/* Controls Bar */}
+            <div className="p-5 bg-gray-950 flex justify-around items-center">
+              {/* Cancel Button */}
+              <button
+                type="button"
+                onClick={stopCamera}
+                className="px-4 py-2 text-xs font-semibold text-gray-400 hover:text-white transition-colors"
+              >
+                Cancel
+              </button>
+
+              {/* Capture Button (Large circular) */}
+              <button
+                type="button"
+                onClick={capturePhoto}
+                className="h-16 w-16 rounded-full border-4 border-white bg-green-500 hover:bg-green-400 active:scale-95 transition-all flex items-center justify-center shadow-lg"
+                title="Capture evidence"
+              >
+                <div className="h-12 w-12 rounded-full bg-white/10 hover:bg-white/20 transition-colors" />
+              </button>
+
+              {/* Toggle Front/Rear Camera */}
+              <button
+                type="button"
+                onClick={toggleCamera}
+                className="h-10 w-10 rounded-full bg-gray-800 hover:bg-gray-700 text-white flex items-center justify-center transition-colors"
+                title="Flip Camera"
+              >
+                <RefreshCw className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Uploaded File Cards */}
       {files.length > 0 && (
         <div className="space-y-3">
           {files.map((mediaFile, index) => (
@@ -187,9 +366,13 @@ export default function MediaUpload({
                       <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded flex items-center gap-1">
                         <Shield className="h-3 w-3" /> Fingerprinted
                       </span>
-                      {mediaFile.geoVerified && (
+                      {mediaFile.geoVerified ? (
                         <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded flex items-center gap-1">
                           <MapPin className="h-3 w-3" /> Geo OK
+                        </span>
+                      ) : (
+                        <span className="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded flex items-center gap-1">
+                          <Shield className="h-3 w-3" /> Browser Geotagged
                         </span>
                       )}
                       {mediaFile.captureFresh && (
@@ -221,11 +404,12 @@ export default function MediaUpload({
         </p>
       )}
 
+      {/* Rules Notice */}
       <div className="bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-800 rounded-lg p-4">
         <h5 className="text-sm font-medium text-amber-800 dark:text-amber-300 mb-2">📸 Real-time verification rules</h5>
         <ul className="text-xs text-amber-700 dark:text-amber-300 space-y-1">
           <li>• Take a new photo with GPS/location enabled on your device</li>
-          <li>• Photo GPS must match your captured device location (within 500m)</li>
+          <li>• Photo location must match your captured device location (within 500m)</li>
           <li>• Photos must be taken within the last 30 minutes</li>
           <li>• Each photo is hashed — reused images are automatically rejected</li>
         </ul>
