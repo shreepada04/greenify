@@ -15,7 +15,7 @@ import RedeemSuccessModal, { type RedeemedVoucher } from '@/app/components/Redee
 import Link from 'next/link'
 
 interface Reward {
-  _id: string
+  id: string
   title: string
   description: string
   brand: string
@@ -321,7 +321,7 @@ export default function RewardsPage() {
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
               {rewards.map((reward) => (
-                <div key={reward._id} className="bg-white rounded-lg shadow-md overflow-hidden hover:shadow-lg transition-shadow">
+                <div key={reward.id} className="bg-white rounded-lg shadow-md overflow-hidden hover:shadow-lg transition-shadow">
                   <img
                     src={reward.imageUrl}
                     alt={reward.title}
@@ -369,15 +369,15 @@ export default function RewardsPage() {
                     )}
 
                     <button
-                      onClick={() => redeemReward(reward._id)}
-                      disabled={userPoints < reward.pointsCost || redeeming === reward._id || reward.currentRedemptions >= reward.maxRedemptions}
+                      onClick={() => redeemReward(reward.id)}
+                      disabled={userPoints < reward.pointsCost || redeeming === reward.id || reward.currentRedemptions >= reward.maxRedemptions}
                       className={`w-full py-2 px-4 rounded-md font-medium transition-colors flex items-center justify-center ${
                         userPoints >= reward.pointsCost && reward.currentRedemptions < reward.maxRedemptions
                           ? 'bg-primary-600 text-white hover:bg-primary-700'
                           : 'bg-gray-300 text-gray-500 cursor-not-allowed'
                       }`}
                     >
-                      {redeeming === reward._id ? (
+                      {redeeming === reward.id ? (
                         <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
                       ) : userPoints < reward.pointsCost ? (
                         `Need ${reward.pointsCost - userPoints} more points`
